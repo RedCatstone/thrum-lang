@@ -9,7 +9,7 @@ use crate::{ErrType, lexing::tokens::{AssignOp, TokenKind}, parsing::ast::{AstAr
 pub enum VmValue {
     #[display("{_0}")]
     Int(i64),
-    #[display("{_0:.1}")]
+    #[display("{_0:?}")]
     Float(f64),
     #[display("\"{_0}\"")]
     Str(String),

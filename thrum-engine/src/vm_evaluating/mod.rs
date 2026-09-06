@@ -434,17 +434,13 @@ impl<'a> VM<'a> {
 
     fn val_to_string(val: &VmValue) -> String {
         match val {
-            VmValue::Int(num) => num.to_string(),
-            VmValue::Float(num) => num.to_string(),
             VmValue::Str(str) => str.clone(),
-            VmValue::Bool(bool) => bool.to_string(),
+            VmValue::Int(_)
+            | VmValue::Float(_)
+            | VmValue::Bool(_)
+            | VmValue::Void
+            | VmValue::Tup(_) => format!("{val}"),
 
-            VmValue::Tup(tup) => {
-                let str_results: Vec<String> = tup.iter().map(Self::val_to_string).collect();
-                String::from("(") + &str_results.join(", ") + ")"
-            }
-
-            VmValue::Void => "void".to_string(),
             _ => panic!("Literal {val:?} cannot be converted into a string.")
         }
     }
