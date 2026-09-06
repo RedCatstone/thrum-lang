@@ -1,4 +1,6 @@
 // run me by doing `cargo run Code.thrum`
 
 
-2.0 + 3.0
+ensure (false, 4) is let (true, x) else panic("Booo!!")
+
+"passed {x^}"

@@ -66,8 +66,7 @@ pub enum Expr {
     TupleArr { elem: ExprId, length: ExprId },  // (0; 4)
     Index { left: ExprId, index: ExprId },  // arr[1]
 
-    If { condition: ExprId, then: ExprId, alt: ExprId },  // if true { ... } else ... (alt is void if not present)
-    Ensure { condition: ExprId, alt: ExprId, then: ExprId },  // ensure true else { ... }
+    If { condition: ExprId, then: ExprId, alt: ExprId, never_alt: bool },  // if true { ... } else ... (alt is void if not present)
     Is { value: ExprId, pattern: PatternId },  // queue.pop() is let .Some(x)
     Match { match_value: ExprId, arms: Vec<AstMatchArm> },  // match response { 2 -> "success", _ -> "nope." }
 

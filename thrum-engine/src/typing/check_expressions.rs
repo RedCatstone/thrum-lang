@@ -214,41 +214,30 @@ impl TypeChecker<'_> {
                 self.check_infix(*op, *op_span, left_type, right_type, check_expr)
             }
 
-            Expr::If { condition, then, alt } => {
+            Expr::If { condition, then, alt, never_alt } => {
                 self.check_expression(*condition, is_never, ctx.expect(TypeId::BOOL).allow_is_bindings(true));
 
                 let snap = self.snapshot_vars_state();
                 let branch_ctx = ctx.maybe_expect(old_ctx.expected_type);
 
                 let mut then_is_never = false;
-                let then_typ = self.check_expression(*then, &mut then_is_never, branch_ctx);
+                let then_type = self.check_expression(*then, &mut then_is_never, branch_ctx);
                 let then_snap = self.snapshot_branch_vars_state(then_is_never);
                 self.restore_vars_state(&snap);
 
                 let mut alt_is_never = false;
-                let alt_typ = self.check_expression(*alt, &mut alt_is_never, branch_ctx);
+                let alt_type = self.check_expression(*alt, &mut alt_is_never, branch_ctx);
+                if *never_alt && !alt_is_never {
+                    alt_is_never = true; // no cascading errors
+                    self.type_mismatch(TypeId::NEVER, alt_type, self.ast.get_expr_span(*alt));
+                }
+
                 let alt_snap = self.snapshot_branch_vars_state(alt_is_never);
                 self.merge_vars_states(snap, &[then_snap, alt_snap]);
 
                 // determine the final type: (used to be more complicated, thats why this comment is here lol)
-                self.unify_types(then_typ, alt_typ, span, UnifyMode::FindParentType)
+                self.unify_types(then_type, alt_type, span, UnifyMode::FindParentType)
             },
-
-            Expr::Ensure { condition, alt, then } => {
-                self.check_expression(*condition, is_never, ctx.expect(TypeId::BOOL).allow_is_bindings(true));
-
-                let snap = self.snapshot_vars_state();
-
-                let alt_type = self.check_expression(*alt, &mut false, ctx);
-                if alt_type != TypeId::NEVER {
-                    self.type_mismatch(TypeId::NEVER, alt_type, self.ast.get_expr_span(*alt));
-                }
-
-                // since the alt is always Type::Never, only the then branch snapshot matters
-                self.restore_vars_state(&snap);
-
-                self.check_expression(*then, is_never, ctx)
-            }
 
             Expr::Match { match_value, arms } => {
                 let match_val_type = self.check_expression(*match_value, is_never, ctx);

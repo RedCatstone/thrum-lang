@@ -1,4 +1,4 @@
-use thrum_engine::vm_compiling::VmValue;
+use thrum_engine::{ErrType, vm_compiling::VmValue};
 mod common;
 
 
@@ -330,10 +330,11 @@ mod common;
     ", VmValue::Int(42));
 }
 
-// #[test]
-// fn ensure_expr() {
-//     test!("ensure true else { panic(\"OoH No!!\") }", VmValue::Void);
-// }
+#[test] fn ensure_expr() {
+    test!("ensure true else panic(\"OoH No!!\"); 4", VmValue::Int(4));
+    test_err!("ensure false else panic(\"OoH No!!\")", ErrType::RuntimeError { .. });
+    test_err!("ensure true else print(\"oOh nO!!\")", ErrType::TyperMismatch { .. });
+}
 
 
 

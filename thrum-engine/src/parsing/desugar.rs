@@ -34,7 +34,8 @@ pub fn desugar_after_parsing(ast: &mut AstArena) {
                     body: expr!(span, Expr::If {
                         condition,
                         then: body,
-                        alt: expr!(span, Expr::Break { label: None, expr: expr!(span, Expr::Void) })
+                        alt: expr!(span, Expr::Break { label: None, expr: expr!(span, Expr::Void) }),
+                        never_alt: false
                     })
                 }
             }

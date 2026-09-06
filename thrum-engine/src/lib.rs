@@ -52,8 +52,8 @@ pub enum ErrType {
         slice_to_or_string(&expected.iter().map(|x| format!("'{x}'")).collect::<Vec<String>>(), "or")
     )]
     ParserExpectToken { expected: Box<[TokenKind]>, err_msg: String, found: TokenKind },
-    #[display("Unexpected expression start.")]
-    ParserUnexpectedExpression,
+    #[display("Multiple Expressions on 1 line without a semicolon splitting them.")]
+    MultipleExprsWithoutSemicolon,
     #[display("Expected an expression. Found {found}")]
     ParserExpectedAnExpression { found: TokenKind },
     #[display("Expected a pattern. Found {found}")]

@@ -170,17 +170,11 @@ impl AstArena {
                 self.format_expr_recursive(*left, s, ind + 1, "arr", false)?;
                 self.format_expr_recursive(*index, s, ind + 1, "idx", true)
             }
-            Expr::If { condition, then, alt } => {
+            Expr::If { condition, then, alt, never_alt: _ } => {
                 writeln!(s)?;
                 self.format_expr_recursive(*condition, s, ind + 1, "cond", false)?;
                 self.format_expr_recursive(*then, s, ind + 1, "then", false)?;
                 self.format_expr_recursive(*alt, s, ind + 1, "else", true)
-            }
-            Expr::Ensure { condition, alt, then } => {
-                writeln!(s)?;
-                self.format_expr_recursive(*condition, s, ind + 1, "cond", false)?;
-                self.format_expr_recursive(*alt, s, ind + 1, "else", false)?;
-                self.format_expr_recursive(*then, s, ind + 1, "then", true)
             }
             Expr::Is { value, pattern } => {
                 writeln!(s)?;

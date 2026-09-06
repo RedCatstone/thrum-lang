@@ -304,16 +304,22 @@ impl Parser<'_> {
                         let then_span = self.ast.get_expr_span(then);
                         self.add_expr(then_span.to_0_width_right(), Expr::Void)
                     };
-                self.add_expr(start, Expr::If { condition, then, alt })
+                self.add_expr(start, Expr::If { condition, then, alt, never_alt: false })
             },
 
             TokenKind::Ensure => {
                 let condition = self.parse_expression(Precedence::Lowest, ctx);
                 self.expect_token(TokenKind::Else, "after the ensure condition");
                 let alt = self.parse_expression_default(ctx);
-                let then = self.add_expr(start.to_0_width_right(), Expr::Void);
 
-                self.add_expr(start, Expr::Ensure { condition, alt, then })
+                if !self.optional_token(TokenKind::Semicolon)
+                && self.peek_is_on_same_line() && self.peek_is_expression_start() {
+                    self.error(ErrType::MultipleExprsWithoutSemicolon);
+                }
+
+                let then = self.parse_optional_expression_or_void(ctx);
+
+                self.add_expr(start, Expr::If { condition, then, alt, never_alt: true })
             },
 
             TokenKind::While => {
@@ -370,11 +376,7 @@ impl Parser<'_> {
                 let typ = self.parse_expression_default(ctx);
                 self.expect_token(TokenKind::LeftBrace, "to open the impl definition block");
 
-                let const_exprs = self.parse_line_seperated(
-                    TokenKind::RightBrace,
-                    |p| p.parse_expression_default(ctx),
-                    |_| None
-                );
+                let const_exprs = self.parse_line_seperated(TokenKind::RightBrace, ctx, false);
 
                 self.add_expr(start, Expr::ImplBlock { typ, const_exprs })
             }
@@ -465,11 +467,7 @@ impl Parser<'_> {
         // '{' already consumed.
         let label = self.optional_label();
 
-        let exprs = self.parse_line_seperated(
-            end_token,
-            |p| p.parse_expression_default(ParserCtx { stop_on_newline_is: false }),
-            |p| Some(p.add_expr(p.prev_token_span, Expr::Void))
-        );
+        let exprs = self.parse_line_seperated(end_token, ParserCtx { stop_on_newline_is: false }, true);
 
         self.add_expr(start, Expr::Block { exprs, label })
     }

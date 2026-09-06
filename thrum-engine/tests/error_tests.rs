@@ -13,7 +13,7 @@ mod common;
     test_err!("fn 1", ErrType::ParserExpectToken { .. });
     test_err!("if", ErrType::ParserExpectedAnExpression { found: TokenKind::EndOfFile });
     test_err!("1 - / 1", ErrType::ParserExpectedAnExpression { found: TokenKind::Op(AssignOp::Slash) });
-    test_err!("1 + 1  15", ErrType::ParserUnexpectedExpression);
+    test_err!("1 + 1  15", ErrType::MultipleExprsWithoutSemicolon);
     test_err!("let = 5", ErrType::ParserExpectedABindingPattern { .. });
     test_err!("{ \n #label }", ErrType::ParserLabelsHaveToBeOnSameLine);
     test_err!("if true => \n 5", ErrType::ParserArrowExprsHaveToBeOnSameLine);

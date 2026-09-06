@@ -476,7 +476,7 @@ impl VmCompiler<'_> {
             }
 
 
-            Expr::If { condition, then, alt } => {
+            Expr::If { condition, then, alt, never_alt: _ } => {
                 self.compile_expression(*condition);
                 let jump_to_else_block = self.push_jump_if_false_op_for_patching();
 

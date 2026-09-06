@@ -1,4 +1,4 @@
-use crate::{ErrType, ProgramError, ProgramErrorData, WarnType, lexing::{self, tokens::{AssignOp, Span, TokenKind, TokenSpan}}, parsing::ast::{AstArena, Expr, ExprId, Pattern, PatternId}};
+use crate::{ErrType, ProgramError, ProgramErrorData, WarnType, lexing::{self, tokens::{AssignOp, Span, TokenKind, TokenSpan}}, parsing::{ast::{AstArena, Expr, ExprId, Pattern, PatternId}, parse_expressions::ParserCtx}};
 
 pub mod ast;
 pub mod desugar;
@@ -184,32 +184,30 @@ impl<'a> Parser<'a> {
         list
     }
 
-    fn parse_line_seperated<Id>(
-        &mut self,
-        end_token: TokenKind,
-        parse_element: impl Fn(&mut Self) -> Id,
-        on_semicolon: impl Fn(&mut Self) -> Option<Id>,
-    ) -> Vec<Id>
-    {
+    fn parse_line_seperated(&mut self, end_token: TokenKind, parse_ctx: ParserCtx, add_semicolon_expr: bool) -> Vec<ExprId> {
         let mut list = Vec::new();
 
         while self.peek().token != end_token && self.peek().token != TokenKind::EndOfFile {
-            list.push(parse_element(self));
+            list.push(self.parse_expression_default(parse_ctx));
             if self.optional_token(TokenKind::Semicolon) {
-                if let Some(semicolon_elem) = on_semicolon(self) {
-                    list.push(semicolon_elem);
+                if add_semicolon_expr {
+                    list.push(self.add_expr(self.prev_token_span, Expr::Void));
                 }
             }
             else if self.peek_is_on_same_line() && self.peek_is_expression_start() {
                 // no semicolon -> next expression can't be on the same line.
                 // (if its actually an expression and not just '}')
-                self.error(ErrType::ParserUnexpectedExpression);
+                self.error(ErrType::MultipleExprsWithoutSemicolon);
             }
         }
         if end_token != TokenKind::EndOfFile {
             self.expect_token(end_token, "to close the block");
         }
         list
+    }
+
+    fn check_multiple_exprs_without_semicolon(&mut self) {
+
     }
 
     fn peek_is_expression_start(&self) -> bool {
