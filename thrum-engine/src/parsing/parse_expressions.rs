@@ -317,7 +317,9 @@ impl Parser<'_> {
                     self.error(ErrType::MultipleExprsWithoutSemicolon);
                 }
 
-                let then = self.parse_optional_expression_or_void(ctx);
+                let then_start = self.prev_token_span.to_0_width_right();
+                let then_exprs = self.parse_line_seperated(TokenKind::RightBrace, false, ctx, true);
+                let then = self.add_expr(then_start, Expr::Block { exprs: then_exprs, label: None });
 
                 self.add_expr(start, Expr::If { condition, then, alt, never_alt: true })
             },
@@ -376,7 +378,7 @@ impl Parser<'_> {
                 let typ = self.parse_expression_default(ctx);
                 self.expect_token(TokenKind::LeftBrace, "to open the impl definition block");
 
-                let const_exprs = self.parse_line_seperated(TokenKind::RightBrace, ctx, false);
+                let const_exprs = self.parse_line_seperated(TokenKind::RightBrace, true, ctx, false);
 
                 self.add_expr(start, Expr::ImplBlock { typ, const_exprs })
             }
@@ -467,7 +469,7 @@ impl Parser<'_> {
         // '{' already consumed.
         let label = self.optional_label();
 
-        let exprs = self.parse_line_seperated(end_token, ParserCtx { stop_on_newline_is: false }, true);
+        let exprs = self.parse_line_seperated(end_token, true, ParserCtx { stop_on_newline_is: false }, true);
 
         self.add_expr(start, Expr::Block { exprs, label })
     }

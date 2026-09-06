@@ -52,7 +52,7 @@ pub enum ErrType {
         slice_to_or_string(&expected.iter().map(|x| format!("'{x}'")).collect::<Vec<String>>(), "or")
     )]
     ParserExpectToken { expected: Box<[TokenKind]>, err_msg: String, found: TokenKind },
-    #[display("Multiple Expressions on 1 line without a semicolon splitting them.")]
+    #[display("Multiple Expressions on 1 line without a semicolon.")]
     MultipleExprsWithoutSemicolon,
     #[display("Expected an expression. Found {found}")]
     ParserExpectedAnExpression { found: TokenKind },
@@ -93,7 +93,7 @@ pub enum ErrType {
     TyperWrongNumberOfArguments { expected: usize, found: usize },
     #[display("Can't call a non-function type: {typ}.")]
     TyperCantCallNonFnType { typ: String, },
-    #[display("member .{member} does not exist on typ: {typ}")]
+    #[display("member .{member} does not exist on type: {typ}")]
     TyperTypeDoesntHaveMember { typ: String, member: String },
     #[display("<never> is not allowed in patterns.")]
     TyperPatternNeverType,

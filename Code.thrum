@@ -1,6 +1,5 @@
 // run me by doing `cargo run Code.thrum`
 
 
-ensure (false, 4) is let (true, x) else panic("Booo!!")
-
-"passed {x^}"
+ensure 4 is let x else panic("")
+"ea {x^}"

@@ -184,7 +184,7 @@ impl<'a> Parser<'a> {
         list
     }
 
-    fn parse_line_seperated(&mut self, end_token: TokenKind, parse_ctx: ParserCtx, add_semicolon_expr: bool) -> Vec<ExprId> {
+    fn parse_line_seperated(&mut self, end_token: TokenKind, consume_end: bool, parse_ctx: ParserCtx, add_semicolon_expr: bool) -> Vec<ExprId> {
         let mut list = Vec::new();
 
         while self.peek().token != end_token && self.peek().token != TokenKind::EndOfFile {
@@ -200,14 +200,10 @@ impl<'a> Parser<'a> {
                 self.error(ErrType::MultipleExprsWithoutSemicolon);
             }
         }
-        if end_token != TokenKind::EndOfFile {
+        if consume_end && end_token != TokenKind::EndOfFile {
             self.expect_token(end_token, "to close the block");
         }
         list
-    }
-
-    fn check_multiple_exprs_without_semicolon(&mut self) {
-
     }
 
     fn peek_is_expression_start(&self) -> bool {
