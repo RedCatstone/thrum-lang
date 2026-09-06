@@ -215,15 +215,19 @@ impl TypeChecker<'_> {
             }
 
             Expr::If { condition, then, alt, never_alt } => {
+                let snap_before = self.snapshot_vars_state();
+                self.enter_scope();
+
                 self.check_expression(*condition, is_never, ctx.expect(TypeId::BOOL).allow_is_bindings(true));
 
-                let snap = self.snapshot_vars_state();
                 let branch_ctx = ctx.maybe_expect(old_ctx.expected_type);
 
                 let mut then_is_never = false;
                 let then_type = self.check_expression(*then, &mut then_is_never, branch_ctx);
                 let then_snap = self.snapshot_branch_vars_state(then_is_never);
-                self.restore_vars_state(&snap);
+
+                self.exit_scope();
+                self.restore_vars_state(&snap_before);
 
                 let mut alt_is_never = false;
                 let alt_type = self.check_expression(*alt, &mut alt_is_never, branch_ctx);
@@ -233,7 +237,7 @@ impl TypeChecker<'_> {
                 }
 
                 let alt_snap = self.snapshot_branch_vars_state(alt_is_never);
-                self.merge_vars_states(snap, &[then_snap, alt_snap]);
+                self.merge_vars_states(snap_before, &[then_snap, alt_snap]);
 
                 // determine the final type: (used to be more complicated, thats why this comment is here lol)
                 self.unify_types(then_type, alt_type, span, UnifyMode::FindParentType)
@@ -779,15 +783,17 @@ impl TypeChecker<'_> {
             }
         }
 
-        // set the return context to this functions return type
-        let backup = self.curr_function_return_type;
+        // set the return context to this functions return type and remove break contexts
+        let backup_ret = self.curr_function_return_type;
         self.curr_function_return_type = Some(return_type);
+        let backup_labels = std::mem::take(&mut self.curr_label_infos);
 
         self.check_expression(closure.body, &mut false,  CheckExprCtx::default().expect(return_type));
         self.exit_scope();
 
-        // reset return context
-        self.curr_function_return_type = backup;
+        // reset return/break context
+        self.curr_label_infos = backup_labels;
+        self.curr_function_return_type = backup_ret;
 
         fn_type
     }

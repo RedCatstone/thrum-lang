@@ -1,5 +1,5 @@
 // run me by doing `cargo run Code.thrum`
 
+if 4 is let x => 0 else panic("{x^} shouldn't exist here...")
 
-ensure 4 is let x else panic("")
-"ea {x^}"
+loop => fn sneaky() => break

@@ -30,6 +30,9 @@ mod common;
 
     test_err!("let s = \"hello\"; s^; s^", ErrType::TyperCantUseMovedVar { .. });
     test_err!("let s = \"blub\"; if true { s^ }; s^", ErrType::TyperCantUseMaybeMovedVar { .. });
+
+    test_err!("if 42 is let x => 0 else x^", ErrType::TyperUndefinedIdentifier { .. });
+    test_err!("ensure 42 is let x else panic(\"{x^}\")", ErrType::TyperUndefinedIdentifier { .. });
 }
 
 #[test] fn type_mismatch_simple() {
@@ -64,6 +67,7 @@ mod common;
 #[test] fn typecheck_misc_errors() {
     test_err!("loop { break #outer }", ErrType::TyperUndefinedLoopLabel { .. });
     test_err!("break", ErrType::TyperBreakOutsideLoop);
+    test_err!("loop => fn sneaky() => break", ErrType::TyperBreakOutsideLoop);
     test_err!("return", ErrType::TyperReturnOutsideFunction);
     test_err!("Self", ErrType::TyperSelfOutsideImplBlock);
 
