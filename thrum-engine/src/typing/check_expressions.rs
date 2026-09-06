@@ -369,8 +369,12 @@ impl TypeChecker<'_> {
             },
 
             Expr::Break { expr, label } => {
-                // this is None if it couldn't find where to break to (already errored)
-                let break_ctx = ctx.maybe_expect(self.find_loop_label(label.as_deref(), span).map(|info| info.typ));
+                let break_info = self.find_loop_label(label.as_deref(), span).map(|info| info.typ);
+                // if it couldn't find where to break to, it errors. because i have to find the label
+                // twice in this block, i store if the label was found to prevent a second error
+                let label_found = break_info.is_some();
+                let break_ctx = ctx.maybe_expect(break_info);
+
                 let mut expr_is_never = false;
                 self.check_expression(*expr, &mut expr_is_never, break_ctx);
 
@@ -389,7 +393,7 @@ impl TypeChecker<'_> {
                 let snap = self.snapshot_branch_vars_state(expr_is_never);
 
                 // refind break_info to make the borrow checker happy
-                if let Some(info) = self.find_loop_label(label.as_deref(), span) {
+                if label_found && let Some(info) = self.find_loop_label(label.as_deref(), span) {
                     info.break_snapshots.push(snap);
                     let break_to = info.expr;
                     self.typed_ast.resolved_labels.insert(check_expr, break_to);
