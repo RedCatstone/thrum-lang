@@ -58,12 +58,12 @@ impl Lexer<'_> {
             if remaining.starts_with("/*") { self.skip_comment("*/"); continue }
 
             // check if the start of remaining matches any Punctuation token
-            if let Some((s, kind)) = TokenKind::PUNCTUATION.into_iter().find(|(p, _)| remaining.starts_with(p)) {
+            if let Some(&(s, kind)) = TokenKind::PUNCTUATION.iter().find(|(p, _)| remaining.starts_with(p)) {
                 if let Some(bl) = &mut brace_level {
-                    if kind == TokenKind::LeftBrace {
+                    if let TokenKind::LeftBrace = kind {
                         *bl += 1;
                     }
-                    if kind == TokenKind::RightBrace {
+                    if let TokenKind::RightBrace = kind {
                         if *bl == 0 { return }
                         *bl -= 1;
                     }
@@ -80,7 +80,7 @@ impl Lexer<'_> {
                     let ident = self.eat_identifier();
 
                     // is the identifier a keyword?
-                    if let Some((_, kind)) = TokenKind::KEYWORDS.into_iter().find(|(kw, _)| *kw == ident) {
+                    if let Some(&(_, kind)) = TokenKind::KEYWORDS.iter().find(|(kw, _)| *kw == ident) {
                         self.add_token(kind);
                     } else {
                         // the actual name will be gotten from the source code with the TokenSpan

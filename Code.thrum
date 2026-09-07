@@ -1,3 +1,9 @@
 // run me by doing `cargo run Code.thrum`
 
-- 1
+let mut sum = 0;
+
+for x in 0..10 {
+    sum += x
+}
+
+sum^

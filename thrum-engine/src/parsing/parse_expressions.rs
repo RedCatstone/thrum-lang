@@ -203,10 +203,11 @@ impl Parser<'_> {
                 self.add_expr(start, Expr::Index { left: left_expr, index })
             },
 
-            TokenKind::DotDot => {
+            TokenKind::DotDot | TokenKind::DotDotEqual => {
                 let right = self.parse_expression_default(ctx);
 
-                let range_type = self.add_expr(start, Expr::IdentifierRef { name: "Range".to_string(), mutable: false });
+                let range_type_name = if op.token == TokenKind::DotDotEqual { "RangeInclusive" } else { "Range" };
+                let range_type = self.add_expr(start, Expr::IdentifierRef { name: range_type_name.to_string(), mutable: false });
                 let data = self.add_expr(start, Expr::Tuple { elems: vec![
                     AstTupleElement { label: "start".to_string(), expr: left_expr },
                     AstTupleElement { label: "end".to_string(), expr: right },

@@ -1,11 +1,18 @@
 type Option = enum { None, Some{ int } }
 
 type Range = (start: int, end: int);
-type RangeIter = (curr: int, end: int);
+type RangeInclusive = (start: int, end: int);
+type RangeIter = (curr: int, end: int, extra: bool);
 
 impl Range {
     fn iter(self: Self) -> RangeIter {
-        RangeIter{ curr: self.start, end: self.end }
+        RangeIter{ curr: self.start, end: self.end, extra: true }
+    }
+}
+
+impl RangeInclusive {
+    fn iter(self: Self) -> RangeIter {
+        RangeIter{ curr: self.start, end: self.end, extra: false }
     }
 }
 
@@ -15,6 +22,9 @@ impl RangeIter {
             let x = self.curr^
             self.curr += 1
             :Some{ x }
+        } else if !self.extra and self.curr == self.end {
+            self.extra = true
+            :Some{ self.curr }
         } else {
             :None
         }

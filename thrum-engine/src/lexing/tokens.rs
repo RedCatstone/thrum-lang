@@ -15,9 +15,9 @@ impl TokenSpan {
 
 #[derive(Debug, Display, Clone, Copy, PartialEq)]
 #[display("{}",
-    Self::PUNCTUATION.into_iter()
+    Self::PUNCTUATION.iter()
         .chain(Self::KEYWORDS)
-        .find_map(|(s, kind)| (kind == *self).then_some(s))
+        .find_map(|(s, kind)| (kind == self).then_some(s))
         .unwrap_or_else(|| panic!("i forgot to handle that variant... {self:?}"))
 )]
 pub enum TokenKind {
@@ -98,7 +98,7 @@ pub enum AssignOp {
 }
 
 impl TokenKind {
-    pub const PUNCTUATION: [(&'static str, Self); 41] = [
+    pub const PUNCTUATION: &[(&'static str, Self)] = &[
         // Longer tokens need to go first otherwise it picks '-' over '->'
 
         // Basic
@@ -115,7 +115,7 @@ impl TokenKind {
         ("?", Self::Quest),
         ("#", Self::Hashtag),
         ("...", Self::DotDotDot),
-        ("..", Self::DotDot), ("..=", Self::DotDotEqual),
+        ("..=", Self::DotDotEqual), ("..", Self::DotDot),
         (".", Self::Dot),
         ("&", Self::Ampersand),
 
@@ -134,7 +134,7 @@ impl TokenKind {
         (">=", Self::GreaterEqual), (">", Self::Greater),
     ];
 
-    pub const KEYWORDS: [(&'static str, Self); 26] = [
+    pub const KEYWORDS: &[(&'static str, Self)] = &[
         // Keywords
         ("and", Self::And), ("or", Self::Or),
         ("if", Self::If), ("else", Self::Else), ("ensure", Self::Ensure),
