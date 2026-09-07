@@ -1,3 +1,3 @@
 // run me by doing `cargo run Code.thrum`
 
-break
+(let a, let b)

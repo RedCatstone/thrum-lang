@@ -1,4 +1,4 @@
-use crate::{ErrType, ProgramError, ProgramErrorData, WarnType, lexing::{self, tokens::{AssignOp, Span, TokenKind, TokenSpan}}, parsing::{ast::{AstArena, Expr, ExprId, Pattern, PatternId}, parse_expressions::ParserCtx}};
+use crate::{ErrType, ProgramError, ProgramErrorData, WarnType, lexing::{self, tokens::{AssignOp, Span, TokenKind, TokenSpan}}, parsing::{ast::{AstArena, Expr, ExprId, Pattern, PatternId}, parse_expressions::{ParserCtx, Precedence}}};
 
 pub mod ast;
 pub mod desugar;
@@ -168,7 +168,7 @@ impl<'a> Parser<'a> {
     fn parse_comma_separated<T>(
         &mut self,
         end_token: TokenKind,
-        parse_element: impl Fn(&mut Self, i32) -> T,
+        mut parse_element: impl FnMut(&mut Self, i32) -> T,
         err_msg: &str
     ) -> Vec<T>
     {
@@ -188,7 +188,10 @@ impl<'a> Parser<'a> {
         let mut list = Vec::new();
 
         while self.peek().token != end_token && self.peek().token != TokenKind::EndOfFile {
-            list.push(self.parse_expression_default(parse_ctx));
+            // this allows statement positions, because this function
+            // is only used in parsing multiple {}-block expressions.
+            let (expr, _) = self.parse_expression_or_statement(Precedence::Lowest, parse_ctx, true);
+            list.push(expr);
             if self.optional_token(TokenKind::Semicolon) {
                 if add_semicolon_expr {
                     list.push(self.add_expr(self.prev_token_span, Expr::Void));

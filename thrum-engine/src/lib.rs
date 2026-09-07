@@ -64,6 +64,8 @@ pub enum ErrType {
     ParserLabelsHaveToBeOnSameLine,
     #[display("Arrow expressions have to be on the same line with the '=>'.")]
     ParserArrowExprsHaveToBeOnSameLine,
+    #[display("Expression is only allowed in statement-position.")]
+    ParserOnlyAllowedInStatementPosition,
     #[display("Could not parse number.")]
     ParserNumberParseError,
 
@@ -190,7 +192,8 @@ pub enum WarnType {
 pub fn run_code(source_code: &str) -> Result<VmValue, Vec<ErrType>> {
     // line numbers are gonna be messed up by just slapping the prelude before the code
     // but i don't care for now
-    const PRELUDE: &str = include_str!("prelude.thrum");
+    const INCLUDE_PRELUDE: bool = true;
+    const PRELUDE: &str = if INCLUDE_PRELUDE { include_str!("prelude.thrum") } else { "" };
     let preluded_source_code = &format!("{PRELUDE}\n{source_code}");
 
     let mut err_data = ProgramErrorData::new();

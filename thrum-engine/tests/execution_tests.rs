@@ -548,3 +548,8 @@ mod common;
         is _ => true
     ", VmValue::Bool(true));
 }
+
+
+#[test] fn prelude() {
+    test!("Range{ start: 1, end: 2 }", VmValue::Tup(vec![VmValue::Int(2), VmValue::Int(1)]));
+}

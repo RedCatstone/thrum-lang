@@ -19,6 +19,18 @@ mod common;
     test_err!("if true => \n 5", ErrType::ParserArrowExprsHaveToBeOnSameLine);
 }
 
+#[test] fn parse_statement_position() {
+    test_err!("2 + fn none() { }", ErrType::ParserOnlyAllowedInStatementPosition);
+    test_err!("2 + let x", ErrType::ParserOnlyAllowedInStatementPosition);
+
+    test_err!("fn fn none() { } + 2", ErrType::ParserExpectedAnExpression { .. });
+    test_err!("let x + 2", ErrType::ParserExpectedAnExpression { .. });
+    test_err!("fn fn none() { } 2", ErrType::MultipleExprsWithoutSemicolon);
+
+    test_err!("(let a)", ErrType::ParserOnlyAllowedInStatementPosition);
+    test_err!("(let a, let b)", ErrType::ParserOnlyAllowedInStatementPosition);
+}
+
 
 #[test] fn typecheck_var_errors() {
     test_err!("x = 10", ErrType::TyperUndefinedIdentifier { .. });
@@ -57,6 +69,7 @@ mod common;
 
     test_err!("let mut x = 5; x += true", ErrType::TyperMismatch { .. });
 }
+
 #[test] fn type_mismatch_enums() {
     test_err!("
         fn handle_some(:Some{ inner }: Option.Some) -> int => inner
@@ -67,7 +80,7 @@ mod common;
 #[test] fn typecheck_misc_errors() {
     test_err!("loop { break #outer }", ErrType::TyperUndefinedLoopLabel { .. });
     test_err!("break", ErrType::TyperBreakOutsideLoop);
-    test_err!("loop => fn sneaky() => break", ErrType::TyperBreakOutsideLoop);
+    test_err!("loop { fn sneaky() => break }", ErrType::TyperBreakOutsideLoop);
     test_err!("return", ErrType::TyperReturnOutsideFunction);
     test_err!("Self", ErrType::TyperSelfOutsideImplBlock);
 
