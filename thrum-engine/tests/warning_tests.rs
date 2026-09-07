@@ -7,14 +7,14 @@ mod common;
 }
 
 #[test] fn unused_var_warn() {
-    test_warn!("let x = 5", WarnType::UnusedVar { .. });
+    test_warn!("let x = 5", WarnType::TyperUnusedVar { .. });
     test_no_warn!("let _x = 5");
     test_no_warn!("let x = 5; x^");
 }
 
 #[test] fn unused_mut_var_warn() {
-    test_warn!("let mut x = 5; x^", WarnType::UnusedMutVar { .. });
-    test_warn!("let mut _x = 5; _x^", WarnType::UnusedMutVar { .. });
+    test_warn!("let mut x = 5; x^", WarnType::TyperUnusedMutVar { .. });
+    test_warn!("let mut _x = 5; _x^", WarnType::TyperUnusedMutVar { .. });
     test_no_warn!("let mut x = 5; x = 10; x^");
 }
 
@@ -26,4 +26,13 @@ mod common;
     test_no_warn!("1  +  2");
     test_no_warn!("1 + 2");
     test_no_warn!("1+2");
+}
+#[test] fn prefix_spacing_warnings() {
+    test_warn!("- 1", WarnType::ParserUnnecessarySpacingAfterPrefixOp { .. });
+    test_warn!("! false", WarnType::ParserUnnecessarySpacingAfterPrefixOp { .. });
+    test_warn!("!\nfalse", WarnType::ParserUnnecessarySpacingAfterPrefixOp { .. });
+
+    test_no_warn!("-1");
+    test_no_warn!("1\n- 1");
+    test_no_warn!("!( false )");
 }

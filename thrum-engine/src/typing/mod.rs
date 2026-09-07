@@ -605,10 +605,10 @@ impl TypeChecker<'_> {
 
                 match var.is_used {
                     TypeVarIsUsed::No if !var.name.starts_with('_') => {
-                        self.error_data.warn(WarnType::UnusedVar { var: var.clone() }, var.declared_at);
+                        self.error_data.warn(WarnType::TyperUnusedVar { var: var.clone() }, var.declared_at);
                     }
                     TypeVarIsUsed::Immut if var.is_declared_mut => {
-                        self.error_data.warn(WarnType::UnusedMutVar { var: var.clone() }, var.declared_at);
+                        self.error_data.warn(WarnType::TyperUnusedMutVar { var: var.clone() }, var.declared_at);
                     }
                     _ => {}
                 }

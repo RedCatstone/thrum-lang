@@ -239,6 +239,10 @@ impl Parser<'_> {
 
         let expr = match op.token {
             TokenKind::Exclamation | TokenKind::Op(AssignOp::Minus) => {
+                if self.peek_spaces_before() > 0 {
+                    self.error_data.warn(WarnType::ParserUnnecessarySpacingAfterPrefixOp { op: op.token }, op.span);
+                }
+
                 let right = self.parse_expression(Precedence::Prefix, ctx);
                 self.add_expr(start, Expr::Prefix { op: op.token, right })
             }

@@ -189,13 +189,15 @@ pub enum ErrType {
 #[derive(Debug, Display, Clone)]
 #[display("Warning: {_variant}")]
 pub enum WarnType {
-    #[display("Incosistent spacing around infix {op}")]
+    #[display("Incosistent spacing around infix '{op}'.")]
     ParserInconsistentSpacingAroundInfixOp { op: TokenKind },
+    #[display("Unnecessary spacing after prefix '{op}'.")]
+    ParserUnnecessarySpacingAfterPrefixOp { op: TokenKind },
 
     #[display("{var} is never used.")]
-    UnusedVar { var: TypeVar },
+    TyperUnusedVar { var: TypeVar },
     #[display("{var} is never used mutably.")]
-    UnusedMutVar { var: TypeVar },
+    TyperUnusedMutVar { var: TypeVar },
 }
 
 
