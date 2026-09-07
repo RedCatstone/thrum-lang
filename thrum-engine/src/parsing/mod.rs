@@ -85,15 +85,7 @@ impl<'a> Parser<'a> {
     #[track_caller]
     fn warn(&mut self, warn_type: WarnType) {
         let span = self.peek().span;
-        self.warn_with_span(warn_type, span);
-    }
-    #[track_caller]
-    fn warn_with_span(&mut self, warn_type: WarnType, span: Span) {
-        self.error_data.warnings.push(ProgramError {
-            span,
-            err_type: warn_type,
-            compiler_location: std::panic::Location::caller()
-        });
+        self.error_data.warn(warn_type, span);
     }
 
     fn add_expr(&mut self, start: Span, expr: Expr) -> ExprId {

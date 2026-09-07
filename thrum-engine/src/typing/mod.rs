@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, HashSet}, fmt::{self, Write}};
 
 use crate::{
-    ErrType, ProgramError, ProgramErrorData, lexing::tokens::Span, nativelib::get_native_lib, parsing::ast::{AstArena, AstIds, ExprId, PatternId}, typing::{check_expressions::CheckExprCtx, type_vars::{SnapshotVarsState, TypeVar, TypeVarScope}}, vm_compiling::{FunctionRegistry, NumMode, VmValue}
+    ErrType, ProgramError, ProgramErrorData, WarnType, lexing::tokens::Span, nativelib::get_native_lib, parsing::ast::{AstArena, AstIds, ExprId, PatternId}, typing::{check_expressions::CheckExprCtx, type_vars::{SnapshotVarsState, TypeVar, TypeVarIsUsed, TypeVarScope}}, vm_compiling::{FunctionRegistry, NumMode, VmValue}
 };
 
 pub mod type_vars;
@@ -255,7 +255,7 @@ impl TypeChecker<'_> {
         // check the main expression
         tc.check_expression(ExprId(0), &mut false, CheckExprCtx::default());
 
-        tc.finalize_types();
+        tc.finalize_types_and_vars();
 
         (tc.typed_ast, tc.compiled_functions)
     }
@@ -574,7 +574,7 @@ impl TypeChecker<'_> {
     /// The final smoshing phase, also called zonking
     /// here its getting rid of all `Infer()` types. If it can't, it will throw a `TyperCantInferType` error
     /// (num. Infer(0)) -> (num, num)
-    pub(super) fn finalize_types(&mut self) {
+    pub(super) fn finalize_types_and_vars(&mut self) {
         // cache to prevent recursively zonking the same type thousands of times.
         let mut cache = vec![None; self.type_arena.types.len()];
 
@@ -592,6 +592,26 @@ impl TypeChecker<'_> {
         for i in 0..self.typed_ast.enum_defs.len() {
             for j in 0..self.typed_ast.enum_defs[i].variants.len() {
                 self.typed_ast.enum_defs[i].variants[j].1 = self.zonk_type(self.typed_ast.enum_defs[i].variants[j].1, Span::invalid(), &mut cache);
+            }
+        }
+
+        // warnings for unused vars
+        if self.error_data.errors.is_empty() {
+            for var in &self.typed_ast.vars {
+                // don't warn for Prelude stuff, like `Range.iter()`
+                if var.declared_at.byte_offset < crate::PRELUDE.len() || var.declared_at.byte_offset == usize::MAX {
+                    continue
+                }
+
+                match var.is_used {
+                    TypeVarIsUsed::No if !var.name.starts_with('_') => {
+                        self.error_data.warn(WarnType::UnusedVar { var: var.clone() }, var.declared_at);
+                    }
+                    TypeVarIsUsed::Immut if var.is_declared_mut => {
+                        self.error_data.warn(WarnType::UnusedMutVar { var: var.clone() }, var.declared_at);
+                    }
+                    _ => {}
+                }
             }
         }
     }

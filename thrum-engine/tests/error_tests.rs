@@ -29,6 +29,7 @@ mod common;
 
     test_err!("(let a)", ErrType::ParserOnlyAllowedInStatementPosition);
     test_err!("(let a, let b)", ErrType::ParserOnlyAllowedInStatementPosition);
+    test_err!("2 + (let a, let b)", ErrType::ParserOnlyAllowedInStatementPosition);
 }
 
 

@@ -23,6 +23,15 @@ impl ProgramErrorData {
     const fn new() -> Self {
         Self { errors: Vec::new(), warnings: Vec::new() }
     }
+
+    #[track_caller]
+    fn warn(&mut self, warn_type: WarnType, span: Span) {
+        self.warnings.push(ProgramError {
+            span,
+            err_type: warn_type,
+            compiler_location: std::panic::Location::caller()
+        });
+    }
 }
 pub struct ProgramSourceData<'a> {
     source_code: &'a str,
@@ -181,53 +190,67 @@ pub enum ErrType {
 #[display("Warning: {_variant}")]
 pub enum WarnType {
     #[display("Incosistent spacing around infix {op}")]
-    ParserInconsistentSpacingAroundInfixOp { op: TokenKind }
+    ParserInconsistentSpacingAroundInfixOp { op: TokenKind },
+
+    #[display("{var} is never used.")]
+    UnusedVar { var: TypeVar },
+    #[display("{var} is never used mutably.")]
+    UnusedMutVar { var: TypeVar },
 }
 
 
 
 
+const INCLUDE_PRELUDE: bool = true;
+pub const PRELUDE: &str = if INCLUDE_PRELUDE { include_str!("prelude.thrum") } else { "" };
 
 
-pub fn run_code(source_code: &str) -> Result<VmValue, Vec<ErrType>> {
+pub fn run_code(source_code: &str) -> (Result<VmValue, Vec<ErrType>>, Vec<WarnType>) {
     // line numbers are gonna be messed up by just slapping the prelude before the code
     // but i don't care for now
-    const INCLUDE_PRELUDE: bool = true;
-    const PRELUDE: &str = if INCLUDE_PRELUDE { include_str!("prelude.thrum") } else { "" };
     let preluded_source_code = &format!("{PRELUDE}\n{source_code}");
 
     let mut err_data = ProgramErrorData::new();
+    macro_rules! bail_on_err {
+        ($maybe_err:expr) => {{
+            if let Err(e) = $maybe_err {
+                return (Err(e), err_data.warnings.iter().map(|x| x.err_type.clone()).collect())
+            }
+        }};
+    }
 
     let (lexer_tokens, line_lookup) = lexing::Lexer::start(&mut err_data, preluded_source_code);
     let source_data = ProgramSourceData { source_code: preluded_source_code, line_lookup: &line_lookup };
-    stage_complete("Lexer", &slice_to_string(&lexer_tokens, ", "), &err_data, &source_data)?;
+    bail_on_err!(stage_complete("Lexer", &slice_to_string(&lexer_tokens, ", "), &err_data, &source_data));
 
     let mut ast = parsing::Parser::start(&mut err_data, preluded_source_code, &lexer_tokens);
     drop(lexer_tokens);
-    stage_complete("Parser", &ast.display_expr(ExprId(0)), &err_data, &source_data)?;
+    bail_on_err!(stage_complete("Parser", &ast.display_expr(ExprId(0)), &err_data, &source_data));
 
     parsing::desugar::desugar_after_parsing(&mut ast);
-    stage_complete("Desugar", &ast.display_expr(ExprId(0)), &ProgramErrorData::new(), &source_data)?;
+    bail_on_err!(stage_complete("Desugar", &ast.display_expr(ExprId(0)), &ProgramErrorData::new(), &source_data));
 
     let (typed_ast, mut compiled_functions) = typing::TypeChecker::start(&mut err_data, &ast);
-    stage_complete("Typechecker", &format!("compiled_functions: {compiled_functions:?}"), &err_data, &source_data)?;
+    bail_on_err!(stage_complete("Typechecker", &format!("compiled_functions: {compiled_functions:?}"), &err_data, &source_data));
 
     vm_compiling::VmCompiler::start(&ast, &typed_ast, &mut compiled_functions);
-    stage_complete("VmCompiler", &format!("{compiled_functions:?}"), &ProgramErrorData::new(), &source_data)?;
+    bail_on_err!(stage_complete("VmCompiler", &format!("{compiled_functions:?}"), &ProgramErrorData::new(), &source_data));
 
 
     let start_execution_time = Instant::now();
     let result = unsafe { VM::start(&mut compiled_functions, None) };
+    let warnings = err_data.warnings.iter().map(|x| x.err_type.clone()).collect();
+
     match result {
         Ok(r) => {
             println!("\n--- Execution Successfull ({:?}) ---", start_execution_time.elapsed());
             println!("{r}");
-            Ok(r)
+            (Ok(r), warnings)
         }
         Err(err) => {
             println!("\n--- Runtime Error ({:?}) ---", start_execution_time.elapsed());
             println!("{err}");
-            Err(vec![err])
+            (Err(vec![err]), warnings)
         }
     }
 }
