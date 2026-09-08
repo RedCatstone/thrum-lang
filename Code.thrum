@@ -1,5 +1,15 @@
 // run me by doing `cargo run Code.thrum`
 
 
+type A = int;
+type B = int;
 
-3.min(5)
+impl A {
+    const ONE: int = B.TWO
+    const THREE: int = 69
+}
+impl B {
+    const TWO: int = A.THREE
+}
+
+A.ONE^

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, ResolvedMemberAccess, ResolvedTypeInstantiation, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternVars, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
 };
@@ -503,29 +505,6 @@ impl TypeChecker<'_> {
                 }
             }
 
-            Expr::ImplBlock { typ, const_exprs } => {
-                let meta_type = self.check_annotation_meta_type_id(*typ, true);
-
-                let impl_scope_idx = self.var_scopes.len();
-                let self_before = self.curr_impl_self.replace((meta_type, impl_scope_idx));
-
-                // add the impl-scope as a normal var scope,
-                // all consts will just end up in there then!1!!
-                let impl_scope = self.type_impls.remove(&meta_type).unwrap_or_default();
-                self.var_scopes.push(impl_scope);
-
-                self.hoisting_pass(const_exprs, false);
-
-                // and insert the impl scope back to where it came from
-                let impl_scope = self.var_scopes.pop().unwrap();
-                self.type_impls.insert(meta_type, impl_scope);
-
-                self.curr_impl_self = self_before;
-
-                // println!("Added impl for type: {}", self.fmt_type(meta_type));
-                TypeId::VOID
-            }
-
             Expr::ImplSelf => {
                 if let Some((id, _)) = self.curr_impl_self {
                     self.typed_ast.resolved_impl_self_type.insert(check_expr, id);
@@ -543,7 +522,7 @@ impl TypeChecker<'_> {
 
             // --- CONST STUFF ---
             // already handled in the hoisting phase
-            | Expr::Const { .. } | Expr::CustomType { .. } => TypeId::VOID,
+            | Expr::Const { .. } | Expr::CustomType { .. } | Expr::ImplBlock { .. } => TypeId::VOID,
 
             Expr::EnumDefinition { variants } => {
                 // the actual enum-type is defined in the hoisting_pass
@@ -655,8 +634,31 @@ impl TypeChecker<'_> {
 
 
 
+    /// the point of an hoisting pass is to typecheck `const`-items out of order.
+    /// if there is a self-dependency-cycle, throw an error
+    /// if one depends on another, typecheck another first, then back to first.
     fn hoisting_pass(&mut self, exprs: &[ExprId], allow_non_const: bool) {
-        // 1. it collects all const exprs and defines them as Unresolved.
+        // this step collects all consts it can find, DOESN'T TYPECHECK and marks them as `NotYetTypechecked`
+        let resolved_impl_meta_types = self.collect_consts(exprs, allow_non_const);
+
+        // go through all `impl`-exprs again and now typecheck all members
+        for &expr in exprs {
+            if let Expr::ImplBlock { .. } = self.ast.get_expr(expr) {
+                let meta_type = resolved_impl_meta_types[&expr];
+
+                self.add_impl_scope(meta_type);
+                self.resolve_current_scope_consts();
+                self.remove_impl_scope(meta_type);
+            }
+        }
+
+        // typecheck the normal consts in scope
+        self.resolve_current_scope_consts();
+    }
+
+    fn collect_consts(&mut self, exprs: &[ExprId], allow_non_const: bool) -> HashMap<ExprId, TypeId> {
+        let mut resolved_impl_meta_types = HashMap::new();
+
         for &expr in exprs {
             match self.ast.get_expr(expr) {
                 Expr::Const { pattern, value } => {
@@ -672,23 +674,58 @@ impl TypeChecker<'_> {
                     );
                     assert_eq!(guess_var_id, var_id);
                 }
+                Expr::ImplBlock { typ, const_exprs } => {
+                    let meta_type = self.check_annotation_meta_type_id(*typ, true);
+
+                    self.add_impl_scope(meta_type);
+                    self.collect_consts(const_exprs, false);
+                    self.remove_impl_scope(meta_type);
+
+                    resolved_impl_meta_types.insert(expr, meta_type);
+                    // println!("Added impl for type: {}", self.fmt_type(meta_type));
+                }
                 _ => if !allow_non_const {
                     self.error(ErrType::TyperRuntimeValuesArentAllowedInImplBlocks, self.ast.get_expr_span(expr));
                 }
             }
         }
 
-        // 2. typechecks all collected Unresolved vars.
-        // if one depends on another, typecheck another first, then back to first.
-        // if there is a self-dependency-cycle, throw an error
+        resolved_impl_meta_types
+    }
+
+    fn add_impl_scope(&mut self, meta_type: TypeId) {
+        let impl_scope_idx = self.var_scopes.len();
+        let self_before = self.curr_impl_self.replace((meta_type, impl_scope_idx));
+        debug_assert_eq!(self_before, None);
+
+        // add the impl-scope as a normal var scope,
+        // all consts will just end up in there then!1!!
+        let impl_scope = self.type_impls.remove(&meta_type).unwrap_or_default();
+        self.var_scopes.push(impl_scope);
+    }
+    fn remove_impl_scope(&mut self, meta_type: TypeId) {
+        // and insert the impl scope back to where it came from
+        let impl_scope = self.var_scopes.pop().unwrap();
+        self.type_impls.insert(meta_type, impl_scope);
+
+        self.curr_impl_self = None;
+    }
+
+
+    fn resolve_current_scope_consts(&mut self) {
         while let Some((value, bind_to)) = self.var_scopes.last().unwrap()
-        .scope.values()
-        .find_map(|&var_id| if let TypeVarConstVal::NotYetTypechecked { value, bind_to }
-        = self.typed_ast.get_var(var_id).const_val { Some((value, bind_to)) } else { None }) {
-            // found a var that was not checked yet!
+            .scope.values()
+            .find_map(|&var_id| {
+                if let TypeVarConstVal::NotYetTypechecked { value, bind_to } = self.typed_ast.get_var(var_id).const_val {
+                    Some((value, bind_to))
+                } else {
+                    None
+                }
+            }) {
             self.check_evaluate_and_bind_const(value, bind_to);
         }
     }
+
 
 
     #[allow(clippy::too_many_arguments, reason = "yes the function is bad, but it works for now")]
@@ -979,10 +1016,12 @@ impl TypeChecker<'_> {
     /// `const N = num`
     /// `N{ 4 }.square()`  // should result in `N`, even though `num.square()` itself returns num
     fn member_access_magic_wrapping(&mut self, resolved_type: TypeId, custom_id: CustomTypeId, custom_inner: TypeId, member_expr: ExprId) -> TypeId {
-
+        if let TypeId::ERROR = resolved_type {
+            TypeId::ERROR
+        }
         // member access yielded the inner type
         // e.g. `const TRUE = true` turns into `CustomBool`
-        if self.are_types_equivalent(custom_inner, resolved_type) {
+        else if self.are_types_equivalent(custom_inner, resolved_type) {
             self.type_arena.add_type(Type::CustomType(custom_id, resolved_type))
         }
 
