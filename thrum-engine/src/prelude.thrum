@@ -12,6 +12,20 @@ impl Option {
     }
 }
 
+
+impl int {
+    fn min(self: Self, other: Self) -> Self => if self < other { self } else { other }
+    fn max(self: Self, other: Self) -> Self => if self > other { self } else { other }
+    fn clamp(self: Self, min: Self, max: Self) -> Self => self^.max(min).min(max)
+}
+
+impl float {
+    fn min(self: Self, other: Self) -> Self => if self < other { self } else { other }
+    fn max(self: Self, other: Self) -> Self => if self > other { self } else { other }
+}
+
+
+
 type Range = (start: int, end: int);
 type RangeInclusive = (start: int, end: int);
 type RangeIter = (curr: int, end: int, extra: bool);

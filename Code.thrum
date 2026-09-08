@@ -1,3 +1,5 @@
 // run me by doing `cargo run Code.thrum`
 
-Option.None.unwrap_or(15)
+
+
+3.min(5)

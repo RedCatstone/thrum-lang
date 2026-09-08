@@ -4,7 +4,7 @@ use derive_more::Display;
 
 use crate::{
     ErrType, lexing::tokens::Span, nativelib::ThrumModule, parsing::ast::{AstEnumExpression, Expr, ExprId, PatternId},
-    typing::{CustomType, CustomTypeId, EnumDefinition, EnumId, LabelInfo, Type, TypeChecker, TypeId, TypeVarId, check_expressions::CheckExprCtx},
+    typing::{CustomTypeId, EnumDefinition, EnumId, LabelInfo, Type, TypeChecker, TypeId, TypeVarId, check_expressions::CheckExprCtx},
     vm_compiling::{VmValue, VmCompiler}
 };
 
@@ -116,24 +116,8 @@ impl<'ast> TypeChecker<'ast> {
     pub(super) fn lookup_variable(&mut self, name: &str) -> Option<TypeVarId> {
         for i in (0..self.var_scopes.len()).rev() {
             if let Some(&var_id) = self.var_scopes[i].scope.get(name) {
-
-                // it needs to ensure that the var was typechecked and compiled
-                let var = self.typed_ast.get_var(var_id);
-                match var.const_val {
-                    TypeVarConstVal::NotYetTypechecked { value, bind_to } => {
-                        // and resolve it!
-                        self.check_evaluate_and_bind_const(value, bind_to);
-                    }
-                    TypeVarConstVal::CurrTypechecking => {
-                        let span = var.declared_at;
-                        self.error(ErrType::TyperConstResolvingCycle, span);
-                    }
-                    TypeVarConstVal::NotYetEvaluated { value, bind_to } => {
-                        self.evaluate_and_bind_const(value, bind_to);
-                    }
-                    TypeVarConstVal::No
-                    | TypeVarConstVal::Evaluated(_) =>  {/* all good, do nothing */}
-                }
+                // on lookup ensure that the var was typechecked and compiled
+                self.resolve_const_val(var_id);
                 return Some(var_id)
             }
         }
@@ -147,6 +131,23 @@ impl<'ast> TypeChecker<'ast> {
     }
 
 
+    pub(super) fn resolve_const_val(&mut self, var_id: TypeVarId) {
+        let var = self.typed_ast.get_var(var_id);
+        match var.const_val {
+            TypeVarConstVal::NotYetTypechecked { value, bind_to } => {
+                // and resolve it!
+                self.check_evaluate_and_bind_const(value, bind_to);
+            }
+            TypeVarConstVal::CurrTypechecking => {
+                self.error(ErrType::TyperConstResolvingCycle, var.declared_at);
+            }
+            TypeVarConstVal::NotYetEvaluated { value, bind_to } => {
+                self.evaluate_and_bind_const(value, bind_to);
+            }
+            TypeVarConstVal::No
+            | TypeVarConstVal::Evaluated(_) =>  {/* all good, do nothing */}
+        }
+    }
 
     pub(super) fn check_evaluate_and_bind_const(&mut self, value: ExprId, bind_to: PatternOrVarId) {
         // mark the pattern as curr typechecking, so it can detect cycles
@@ -206,6 +207,8 @@ impl<'ast> TypeChecker<'ast> {
                 PatternOrVarId::Pattern(pattern) => {
                     self.mark_vars_in_pattern_as_const(pattern, TypeVarConstVal::Evaluated(val));
                 }
+
+                // e.g. `type X = int`
                 PatternOrVarId::CustomTypeVarId(var_id) => {
                     let VmValue::Type(meta_type_id) = val else {
                         unreachable!("not a meta type?! {val}")
@@ -214,7 +217,7 @@ impl<'ast> TypeChecker<'ast> {
                     // add the new CustomType!!
                     let new_type_id = CustomTypeId(self.custom_types.len().try_into().unwrap());
                     let var_name = self.typed_ast.get_var(var_id).name.clone().into_boxed_str();
-                    self.custom_types.push(CustomType { name: var_name, impls: TypeVarScope::default() });
+                    self.custom_types.push(var_name);
 
                     let new_type = self.type_arena.add_type(Type::CustomType(new_type_id, meta_type_id));
                     let type_const = VmValue::Type(new_type);

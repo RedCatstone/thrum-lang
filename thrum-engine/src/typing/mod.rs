@@ -50,12 +50,6 @@ pub struct TypeTuple {
     pub typ: TypeId,
 }
 
-#[derive(Debug)]
-pub struct CustomType<'a> {
-    name: Box<str>,
-    impls: TypeVarScope<'a>
-}
-
 
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, PartialOrd)]
 pub struct TypeId(pub AstIds);
@@ -102,14 +96,16 @@ pub struct TypeChecker<'a> {
 
     // implemented stuff on types
     // e.g. `impl Number { ... }`
-    custom_types: Vec<CustomType<'a>>,  // indexed with CustomTypeId
+    custom_types: Vec<Box<str>>,  // indexed with CustomTypeId
+
+    type_impls: HashMap<TypeId, TypeVarScope<'a>>,
 
     // for return
     curr_function_return_type: Option<TypeId>,
     // for break/continue
     curr_label_infos: Vec<LabelInfo<'a>>,
-    // for impl so they can use Self and self
-    curr_impl_self: Option<TypeId>,
+    // for impl so they can use Self, also includes the scope idx
+    curr_impl_self: Option<(TypeId, usize)>,
 
     // meta compiling stuff, if a function gets compiled during the typechecking phase,
     // it gets kept and doesn't need to be compiled again in the VmCompiler stage
@@ -244,6 +240,7 @@ impl TypeChecker<'_> {
             type_arena: TypeArena::new(),
             inference_types: Vec::new(),
             custom_types: Vec::new(),
+            type_impls: HashMap::new(),
             curr_function_return_type: None,
             curr_label_infos: Vec::new(),
             curr_impl_self: None,
@@ -503,7 +500,7 @@ impl TypeChecker<'_> {
             }
 
             Type::CustomType(custom_id, _) => {
-                write!(s, "{}", self.custom_types[custom_id.0 as usize].name)
+                write!(s, "{}", self.custom_types[custom_id.0 as usize])
             }
 
             Type::EnumVariant { inner, variant: variant_index } => {

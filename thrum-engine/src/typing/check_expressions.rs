@@ -505,31 +505,28 @@ impl TypeChecker<'_> {
             Expr::ImplBlock { typ, const_exprs } => {
                 let meta_type = self.check_annotation_meta_type_id(*typ, true);
 
-                if let Type::CustomType(custom_id, _) = self.prune_type_once_infer_err(meta_type, span) {
-                    let self_before = self.curr_impl_self.replace(meta_type);
+                let impl_scope_idx = self.var_scopes.len();
+                let self_before = self.curr_impl_self.replace((meta_type, impl_scope_idx));
 
-                    // add the impl-scope as a normal var scope,
-                    // all consts will just end up in there then!1!!
-                    let impl_scope = std::mem::take(&mut self.custom_types[custom_id.0 as usize].impls);
-                    self.var_scopes.push(impl_scope);
+                // add the impl-scope as a normal var scope,
+                // all consts will just end up in there then!1!!
+                let impl_scope = self.type_impls.remove(&meta_type).unwrap_or_default();
+                self.var_scopes.push(impl_scope);
 
-                    self.hoisting_pass(const_exprs, false);
+                self.hoisting_pass(const_exprs, false);
 
-                    // and insert the impl scope back to where it came from
-                    self.custom_types[custom_id.0 as usize].impls = self.var_scopes.pop().unwrap();
+                // and insert the impl scope back to where it came from
+                let impl_scope = self.var_scopes.pop().unwrap();
+                self.type_impls.insert(meta_type, impl_scope);
 
-                    // println!("Added impl for type: {}", self.fmt_type(meta_type));
+                self.curr_impl_self = self_before;
 
-                    self.curr_impl_self = self_before;
-                } else {
-                    self.error(ErrType::TyperCantImplNonCustomType { typ: self.fmt_type(meta_type) }, span);
-                }
-
+                // println!("Added impl for type: {}", self.fmt_type(meta_type));
                 TypeId::VOID
             }
 
             Expr::ImplSelf => {
-                if let Some(id) = self.curr_impl_self {
+                if let Some((id, _)) = self.curr_impl_self {
                     self.typed_ast.resolved_impl_self_type.insert(check_expr, id);
                     TypeId::TYPE
                 } else {
@@ -900,7 +897,7 @@ impl TypeChecker<'_> {
 
 
         // if there wasn't any type specific things that matched check the types impls
-        if let Some((constant, typ)) = self.check_type_impl_const(&left_type, member) {
+        if let Some((constant, typ)) = self.check_type_impl_const(left_type_id, member) {
             let resolved = if came_from_meta {
                 // `i32.square(5)`
                 ResolvedMemberAccess::Member { constant }
@@ -948,17 +945,29 @@ impl TypeChecker<'_> {
     }
 
 
-    fn check_type_impl_const(&mut self, typ: &Type, member: &str) -> Option<(VmValue, TypeId)> {
-        if let Type::CustomType(custom_id, _) = typ
-        && let Some(&member) = self.custom_types[custom_id.0 as usize].impls.scope.get(member) {
-            // found a member!
+    fn check_type_impl_const(&mut self, type_id: TypeId, member: &str) -> Option<(VmValue, TypeId)> {
+        let type_id = self.prune_id_once(type_id);
 
-            match &self.typed_ast.get_var(member).const_val {
-                TypeVarConstVal::Evaluated(constant) => Some((constant.clone(), self.make_var_id_ref(member, false))),
-                other => unreachable!("should be an evaluated const... {other:?}")
+        // if its currently inside an impl for this exact type, then the impl-scope was
+        // removed from `self.type_impls` and instead added to var_scopes, so use that one.
+        // (happens e.g. when int impls `clamp()`, which uses `int.max()`)
+        let scope = match self.curr_impl_self {
+            Some((impl_id, idx)) if impl_id == type_id => &self.var_scopes.get(idx)?.scope,
+            _ => &self.type_impls.get(&type_id)?.scope,
+        };
+
+        let &member_var = scope.get(member)?;
+        // found a member!
+
+        println!("const evaluate level {:?}", self.typed_ast.get_var(member_var).const_val);
+
+        self.resolve_const_val(member_var);
+
+        match &self.typed_ast.get_var(member_var).const_val {
+            TypeVarConstVal::Evaluated(constant) => {
+                Some((constant.clone(), self.make_var_id_ref(member_var, false)))
             }
-        } else {
-            None
+            other => unreachable!("{}.{member} had an unevaluated const... {other:?}", self.fmt_type(type_id))
         }
     }
 
