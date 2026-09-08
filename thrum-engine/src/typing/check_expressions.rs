@@ -419,10 +419,11 @@ impl TypeChecker<'_> {
 
                         // `4.square()` is sugar for `u32.square(4)`, this handles that:
                         let extra_arg =
-                        if let Some(ResolvedMemberAccess::MemberWithSelfSugar { self_sugar_expr, .. }) = self.typed_ast.resolved_member_access.get(callee) {
-                            let first_arg_type = self.typed_ast.get_expr_type(*self_sugar_expr);
-                            if let Some(first_param) = param_types.first() {
-                                self.unify_types(*first_param, first_arg_type, self.ast.get_expr_span(*self_sugar_expr), UnifyMode::Subtype);
+                        if let Some(&ResolvedMemberAccess::MemberWithSelfSugar { self_sugar_expr, .. }) = self.typed_ast.resolved_member_access.get(callee) {
+                            if let Some(&first_param) = param_types.first() {
+                                // auto-deref / coerce `self` just like normal function arguments:
+                                let coerced = self.coerce_to_expected_type(self_sugar_expr, first_param);
+                                self.unify_types(first_param, coerced, self.ast.get_expr_span(self_sugar_expr), UnifyMode::Subtype);
                                 // if there isn't a first param it will error on the arg_count check anyways
                             }
                             1
