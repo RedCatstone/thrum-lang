@@ -99,13 +99,12 @@ pub struct TypeChecker<'a> {
     custom_types: Vec<Box<str>>,  // indexed with CustomTypeId
 
     type_impls: HashMap<TypeId, TypeVarScope<'a>>,
+    curr_impl_self: Vec<TypeId>,
 
     // for return
     curr_function_return_type: Option<TypeId>,
     // for break/continue
     curr_label_infos: Vec<LabelInfo<'a>>,
-    // for impl so they can use Self, also includes the scope idx
-    curr_impl_self: Option<(TypeId, usize)>,
 
     // meta compiling stuff, if a function gets compiled during the typechecking phase,
     // it gets kept and doesn't need to be compiled again in the VmCompiler stage
@@ -241,9 +240,9 @@ impl TypeChecker<'_> {
             inference_types: Vec::new(),
             custom_types: Vec::new(),
             type_impls: HashMap::new(),
+            curr_impl_self: Vec::new(),
             curr_function_return_type: None,
             curr_label_infos: Vec::new(),
-            curr_impl_self: None,
             compiled_functions: FunctionRegistry::new(),
         };
         let native_lib = get_native_lib(&mut tc.type_arena);
@@ -281,28 +280,29 @@ impl TypeChecker<'_> {
         self.type_arena.add_type(Type::Infer(id))
     }
 
-    #[must_use]
-    pub fn prune_id_once(&self, mut id: TypeId) -> TypeId {
+    #[must_use] pub fn prune_id_once(&self, mut id: TypeId) -> TypeId {
         while let Type::Infer(infer_id) = self.type_arena.types[id.0 as usize]
         && let Some(resolved_id) = self.inference_types[infer_id.0 as usize] {
             id = resolved_id;
         }
         id
     }
-    #[must_use]
-    pub fn prune_type_once(&self, id: TypeId) -> Type {
+    #[must_use] pub fn prune_id_once_infer_err(&mut self, id: TypeId, err_span: Span) -> TypeId {
+        let id = self.prune_id_once(id);
+        if let Type::Infer(_) = self.type_arena.get_type(id) {
+            self.error(ErrType::TyperTypeMustBeKnownHere { typ: self.fmt_type(id) }, err_span);
+            TypeId::ERROR
+        } else {
+            id
+        }
+    }
+    #[must_use] pub fn prune_type_once(&self, id: TypeId) -> Type {
         let id = self.prune_id_once(id);
         self.type_arena.get_type(id)
     }
-    #[must_use]
-    pub fn prune_type_once_infer_err(&mut self, id: TypeId, err_span: Span) -> Type {
-        let typ = self.prune_type_once(id);
-        if let Type::Infer(_) = typ {
-            self.error(ErrType::TyperTypeMustBeKnownHere { typ: self.fmt_type(id) }, err_span);
-            Type::Error
-        } else {
-            typ
-        }
+    #[must_use] pub fn prune_type_once_infer_err(&mut self, id: TypeId, err_span: Span) -> Type {
+        let id = self.prune_id_once_infer_err(id, err_span);
+        self.type_arena.get_type(id)
     }
 
     #[track_caller]

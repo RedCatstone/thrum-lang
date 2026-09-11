@@ -419,6 +419,24 @@ mod common;
     ", VmValue::Int(2025));
 }
 
+#[test] fn impls_out_of_order_resolution() {
+    test!("
+        impl A {
+            const ONE: int = Self.double(B.TWO)
+            const THREE: int = Self.double(1)
+            fn double(n: int) -> int => n * 2
+        }
+        impl B {
+            const TWO: int = Self.triple(A.THREE)
+            fn triple(n: int) -> int => n * 3
+        }
+        type A = int;
+        type B = int;
+
+        A.ONE^
+    ", VmValue::Int(12));
+}
+
 #[test] fn single_tuple_type_instantiation() {
     test!("type X = int;         -X{ 2 }", VmValue::Int(-2));
     test!("type X = float;       -X{ 2.0 }", VmValue::Float(-2.0));

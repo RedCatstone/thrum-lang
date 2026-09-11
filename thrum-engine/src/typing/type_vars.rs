@@ -37,7 +37,7 @@ pub struct TypeVar {
     pub mut_borrows_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum TypeVarConstVal {
     /// its a runtime variable
     No,
@@ -47,9 +47,9 @@ pub enum TypeVarConstVal {
     NotYetEvaluated { value: ExprId, bind_to: PatternOrVarId },
     Evaluated(VmValue),
 }
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub enum PatternOrVarId {
-    Pattern(PatternId),
+    Pattern(PatternId, DefineVarScope),
     CustomTypeVarId(TypeVarId),
 }
 
@@ -72,6 +72,8 @@ pub enum DefineVarMode {
     Const(TypeVarConstVal),
     Var { mutable: bool, is_init: bool },
 }
+#[derive(Debug, Clone, Copy)]
+pub enum DefineVarScope { CurrScope, Impl { typ: TypeId } }
 
 
 pub type SnapshotVarsState = HashMap<TypeVarId, TypeVarMemState>;
@@ -86,7 +88,7 @@ impl<'ast> TypeChecker<'ast> {
         self.var_scopes.pop().unwrap();
     }
 
-    pub(super) fn define_variable(&mut self, name: &'ast str, typ: TypeId, explicit_type_anot: bool, span: Span, define_mode: DefineVarMode) -> TypeVarId {
+    pub(super) fn define_variable(&mut self, name: &'ast str, typ: TypeId, explicit_type_anot: bool, span: Span, define_scope: DefineVarScope, define_mode: DefineVarMode) -> TypeVarId {
         // a var cant be shadowed if its a const
         let (mutable, is_init, const_val, shadowable) = match define_mode {
             DefineVarMode::Var { mutable, is_init } => (mutable, is_init, TypeVarConstVal::No, true),
@@ -109,9 +111,14 @@ impl<'ast> TypeChecker<'ast> {
 
         let var_id = TypeVarId(self.typed_ast.vars.len().try_into().unwrap());
         self.typed_ast.vars.push(new_var);
-        let previous = self.var_scopes.last_mut().unwrap().scope.insert(name, var_id);
 
-        if !shadowable && previous.is_some() {
+        let scope = match define_scope {
+            DefineVarScope::CurrScope => self.var_scopes.last_mut().unwrap(),
+            DefineVarScope::Impl { typ } => self.type_impls.entry(typ).or_default()
+        };
+        let previous_val = scope.scope.insert(name, var_id);
+
+        if !shadowable && previous_val.is_some() {
             self.error(ErrType::TyperConstNameAlreadyExists { name: name.to_string() }, span);
         }
 
@@ -156,31 +163,39 @@ impl<'ast> TypeChecker<'ast> {
     }
 
     pub(super) fn check_evaluate_and_bind_const(&mut self, value: ExprId, bind_to: PatternOrVarId) {
+        let impl_self = match bind_to {
+            PatternOrVarId::Pattern(_, DefineVarScope::Impl { typ }) => Some(typ),
+            _ => None,
+        };
+        if let Some(typ) = impl_self {
+            self.curr_impl_self.push(typ);
+        }
+
         // mark the pattern as curr typechecking, so it can detect cycles
-        match &bind_to {
-            PatternOrVarId::Pattern(pattern) => {
-                self.mark_vars_in_pattern_as_const(*pattern, TypeVarConstVal::CurrTypechecking);
+        match bind_to {
+            PatternOrVarId::Pattern(pattern, define_scope) => {
+                self.mark_vars_in_pattern_as_const(pattern, TypeVarConstVal::CurrTypechecking, define_scope);
             }
             PatternOrVarId::CustomTypeVarId(var_id) => {
-                self.typed_ast.get_var_mut(*var_id).const_val = TypeVarConstVal::CurrTypechecking;
+                self.typed_ast.get_var_mut(var_id).const_val = TypeVarConstVal::CurrTypechecking;
             }
         }
 
         // typecheck it:
-        // remove these while typechecking consts so it literally can't break/return
+        // remove these while typechecking consts so it can't break/return
         let prev_fn = self.curr_function_return_type.take();
         let prev_labels = std::mem::take(&mut self.curr_label_infos);
 
-        match &bind_to {
-            PatternOrVarId::Pattern(pattern) => {
+        match bind_to {
+            PatternOrVarId::Pattern(pattern, _) => {
                 self.check_assign_pattern_and_value(
-                    *pattern, Some(value), &mut false, true, false, false,
+                    pattern, Some(value), &mut false, true, false, false,
                     Some(TypeVarConstVal::NotYetEvaluated { value, bind_to })
                 );
             }
             PatternOrVarId::CustomTypeVarId(var_id) => {
                 self.check_expression(value, &mut false, CheckExprCtx::default().expect(TypeId::TYPE));
-                self.typed_ast.get_var_mut(*var_id).const_val = TypeVarConstVal::NotYetEvaluated { value, bind_to };
+                self.typed_ast.get_var_mut(var_id).const_val = TypeVarConstVal::NotYetEvaluated { value, bind_to };
             }
         }
 
@@ -190,6 +205,10 @@ impl<'ast> TypeChecker<'ast> {
 
         // evaluate and bind it:
         self.evaluate_and_bind_const(value, bind_to);
+
+        if impl_self.is_some() {
+            assert_eq!(self.curr_impl_self.pop(), impl_self);
+        }
     }
 
 
@@ -210,8 +229,8 @@ impl<'ast> TypeChecker<'ast> {
 
         if let Some(val) = evaluated {
             match bind_to {
-                PatternOrVarId::Pattern(pattern) => {
-                    self.mark_vars_in_pattern_as_const(pattern, TypeVarConstVal::Evaluated(val));
+                PatternOrVarId::Pattern(pattern, define_scope) => {
+                    self.mark_vars_in_pattern_as_const(pattern, TypeVarConstVal::Evaluated(val), define_scope);
                 }
 
                 // e.g. `type X = int`
@@ -294,7 +313,7 @@ impl<'ast> TypeChecker<'ast> {
         if let Some(var_id) = self.lookup_variable(name) {
             self.typed_ast.resolved_expr_var.insert(expr, var_id);
 
-            if is_const && self.typed_ast.get_var(var_id).const_val == TypeVarConstVal::No {
+            if is_const && let TypeVarConstVal::No = self.typed_ast.get_var(var_id).const_val {
                 self.error(ErrType::TyperExpectedConstFoundRuntimeValue { name: name.to_string() }, expr_span)
             } else {
                 self.make_var_id_ref(var_id, mutable)
@@ -473,7 +492,10 @@ impl<'ast> TypeChecker<'ast> {
         for (name, value) in &module.values {
             if value.is_prelude {
                 let id = self.type_arena.add_type(value.typ.clone());
-                self.define_variable(name, id, true, Span::invalid(), DefineVarMode::Const(TypeVarConstVal::Evaluated(value.val.clone())));
+                self.define_variable(
+                    name, id, true, Span::invalid(), DefineVarScope::CurrScope,
+                    DefineVarMode::Const(TypeVarConstVal::Evaluated(value.val.clone()))
+                );
             }
         }
         // Recursion

@@ -270,10 +270,12 @@ impl VmCompiler<'_> {
             .compile_function(expr_id, &[]);
 
         // now just run it
-        let mut reg = FunctionRegistry::new();
-        reg.compiled_functions[0] = CompilingStatus::Compiled(const_chunk);
-        println!("\n{reg:?}");
-        unsafe { vm_evaluating::VM::start(&mut reg, Some(type_arena)) }
+        let entry_slot = compiled_functions.compiled_functions.len();
+        compiled_functions.compiled_functions.push(CompilingStatus::Compiled(const_chunk));
+        compiled_functions.closure_expr_id.push(expr_id);
+
+        // println!("\n{compiled_functions:?}");
+        unsafe { vm_evaluating::VM::start(compiled_functions, Some(type_arena), entry_slot) }
     }
 
     fn new<'a>(ast: &'a AstArena, typed_ast: &'a TypedAst, compiled_functions: &'a mut FunctionRegistry) -> VmCompiler<'a> {

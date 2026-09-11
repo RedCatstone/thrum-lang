@@ -1,15 +1,13 @@
 // run me by doing `cargo run Code.thrum`
 
-
+impl A {
+    const ONE = B.TWO
+    const THREE = 1
+}
+impl B {
+    const TWO = A.THREE
+}
 type A = int;
 type B = int;
 
-impl A {
-    const ONE: int = B.TWO
-    const THREE: int = 69
-}
-impl B {
-    const TWO: int = A.THREE
-}
-
-A.ONE^
+A.ONE^^^

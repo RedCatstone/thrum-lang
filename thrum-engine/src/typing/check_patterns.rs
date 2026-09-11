@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::{
-    ErrType, parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId}, typing::{Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, TypeVarConstVal}}, vm_compiling::VmValue
+    ErrType, parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId}, typing::{Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}}, vm_compiling::VmValue
 };
 
 
@@ -65,7 +65,10 @@ impl<'ast> TypeChecker<'ast> {
                             var.const_val = const_val;
                             existing_id
                         } else {
-                            self.define_variable(name, typ, explicit_type_anot, span, DefineVarMode::Var { mutable: *mutable, is_init: has_value })
+                            self.define_variable(
+                                name, typ, explicit_type_anot, span, DefineVarScope::CurrScope,
+                                DefineVarMode::Var { mutable: *mutable, is_init: has_value }
+                            )
                         };
 
                         self.typed_ast.resolved_pattern_var.insert(pattern, var_id);
@@ -396,7 +399,7 @@ impl<'ast> TypeChecker<'ast> {
     }
 
 
-    pub(super) fn mark_vars_in_pattern_as_const(&mut self, pattern: PatternId, const_val: TypeVarConstVal) {
+    pub(super) fn mark_vars_in_pattern_as_const(&mut self, pattern: PatternId, const_val: TypeVarConstVal, define_scope: DefineVarScope) {
         let span = self.ast.get_pattern_span(pattern);
         match self.ast.get_pattern(pattern) {
             Pattern::Binding { name, mutable } => {
@@ -405,7 +408,9 @@ impl<'ast> TypeChecker<'ast> {
                     self.typed_ast.get_var_mut(*var_id).const_val = const_val;
                 } else {
                     // pattern var doesn't exist so make one
-                    let var_id = self.define_variable(name, TypeId::VOID, true, span, DefineVarMode::Const(const_val));
+                    let var_id = self.define_variable(
+                        name, TypeId::VOID, true, span, define_scope, DefineVarMode::Const(const_val)
+                    );
                     self.typed_ast.resolved_pattern_var.insert(pattern, var_id);
 
                     if *mutable {
@@ -415,7 +420,7 @@ impl<'ast> TypeChecker<'ast> {
             },
             Pattern::Or(patterns) => {
                 // all vars in an or-pattern must be the same, so only marking the first one is fine
-                self.mark_vars_in_pattern_as_const(patterns[0], const_val);
+                self.mark_vars_in_pattern_as_const(patterns[0], const_val, define_scope);
             }
             Pattern::Tuple(ast_tuple_patterns) => {
                 // if we have a const_val, then we need to destructure the const tuple to each pattern.
@@ -423,29 +428,29 @@ impl<'ast> TypeChecker<'ast> {
                     assert_eq!(elems.len(), ast_tuple_patterns.len());
 
                     for (p, elem) in ast_tuple_patterns.iter().zip(elems) {
-                        self.mark_vars_in_pattern_as_const(p.pattern, TypeVarConstVal::Evaluated(elem));
+                        self.mark_vars_in_pattern_as_const(p.pattern, TypeVarConstVal::Evaluated(elem), define_scope);
                     }
                 }
                 else {
                     for p in ast_tuple_patterns {
-                        self.mark_vars_in_pattern_as_const(p.pattern, const_val.clone());
+                        self.mark_vars_in_pattern_as_const(p.pattern, const_val.clone(), define_scope);
                     }
                 }
             }
             Pattern::EnumVariant { name: _, attached_tuple } => {
                 if let Some(tup) = attached_tuple {
-                    self.mark_vars_in_pattern_as_const(*tup, const_val);
+                    self.mark_vars_in_pattern_as_const(*tup, const_val, define_scope);
                 }
             }
             Pattern::String { before: _, hole_parts } => {
                 for hole_part in hole_parts {
-                    self.mark_vars_in_pattern_as_const(hole_part.0, const_val.clone());
+                    self.mark_vars_in_pattern_as_const(hole_part.0, const_val.clone(), define_scope);
                 }
             }
             Pattern::Conditional { pattern, cond: _ }
             | Pattern::Typed { pattern, typ: _ }
             | Pattern::TypeDestructor { typ: _, data: pattern }
-            | Pattern::Not(pattern) => self.mark_vars_in_pattern_as_const(*pattern, const_val),
+            | Pattern::Not(pattern) => self.mark_vars_in_pattern_as_const(*pattern, const_val, define_scope),
 
             Pattern::Wildcard | Pattern::CompareExpr(_) | Pattern::PlacePointer(_) => { /* no vars */ },
         }

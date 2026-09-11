@@ -240,7 +240,7 @@ pub fn run_code(source_code: &str) -> (Result<VmValue, Vec<ErrType>>, Vec<WarnTy
 
 
     let start_execution_time = Instant::now();
-    let result = unsafe { VM::start(&mut compiled_functions, None) };
+    let result = unsafe { VM::start(&mut compiled_functions, None, 0) };
     let warnings = err_data.warnings.iter().map(|x| x.err_type.clone()).collect();
 
     match result {

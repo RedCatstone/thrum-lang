@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, ResolvedMemberAccess, ResolvedTypeInstantiation, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternVars, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
+    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, ResolvedMemberAccess, ResolvedTypeInstantiation, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternVars, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
 };
 
 
@@ -506,7 +506,7 @@ impl TypeChecker<'_> {
             }
 
             Expr::ImplSelf => {
-                if let Some((id, _)) = self.curr_impl_self {
+                if let Some(&id) = self.curr_impl_self.last() {
                     self.typed_ast.resolved_impl_self_type.insert(check_expr, id);
                     TypeId::TYPE
                 } else {
@@ -638,95 +638,90 @@ impl TypeChecker<'_> {
     /// if there is a self-dependency-cycle, throw an error
     /// if one depends on another, typecheck another first, then back to first.
     fn hoisting_pass(&mut self, exprs: &[ExprId], allow_non_const: bool) {
-        // this step collects all consts it can find, DOESN'T TYPECHECK and marks them as `NotYetTypechecked`
-        let resolved_impl_meta_types = self.collect_consts(exprs, allow_non_const);
+        // collects all consts it can find and marks them as `NotYetTypechecked`
+        let resolved_impl_meta_types = self.collect_consts(exprs, allow_non_const, DefineVarScope::CurrScope);
 
-        // go through all `impl`-exprs again and now typecheck all members
-        for &expr in exprs {
-            if let Expr::ImplBlock { .. } = self.ast.get_expr(expr) {
-                let meta_type = resolved_impl_meta_types[&expr];
+        // typecheck all consts in the current scope
+        self.resolve_scope_consts(DefineVarScope::CurrScope);
 
-                self.add_impl_scope(meta_type);
-                self.resolve_current_scope_consts();
-                self.remove_impl_scope(meta_type);
-            }
+        // typecheck all members of `impl`-blocks (2nd impl-iteration)
+        for (_, meta_type) in resolved_impl_meta_types {
+            self.resolve_scope_consts(DefineVarScope::Impl { typ: meta_type });
         }
-
-        // typecheck the normal consts in scope
-        self.resolve_current_scope_consts();
     }
 
-    fn collect_consts(&mut self, exprs: &[ExprId], allow_non_const: bool) -> HashMap<ExprId, TypeId> {
-        let mut resolved_impl_meta_types = HashMap::new();
+    fn collect_consts(&mut self, exprs: &[ExprId], allow_non_const: bool, define_scope: DefineVarScope) -> HashMap<ExprId, TypeId> {
+        // 2 passes so you can use `impl A` before defining it `type A = int`
 
+        // pass 1: `const x = 5`, `type num = int`
         for &expr in exprs {
             match self.ast.get_expr(expr) {
                 Expr::Const { pattern, value } => {
-                    self.mark_vars_in_pattern_as_const(*pattern, TypeVarConstVal::NotYetTypechecked { value: *value, bind_to: PatternOrVarId::Pattern(*pattern) });
+                    self.mark_vars_in_pattern_as_const(
+                        *pattern, TypeVarConstVal::NotYetTypechecked { value: *value, bind_to: PatternOrVarId::Pattern(*pattern, define_scope) },
+                        define_scope
+                    );
                 }
                 Expr::CustomType { name, value } => {
                     let expr_span = self.ast.get_expr_span(expr);
 
                     let guess_var_id = TypeVarId(self.typed_ast.vars.len().try_into().unwrap());
                     let var_id = self.define_variable(
-                        name, TypeId::TYPE, true, expr_span, DefineVarMode::Const(
+                        name, TypeId::TYPE, true, expr_span, define_scope, DefineVarMode::Const(
                             TypeVarConstVal::NotYetTypechecked { value: *value, bind_to: PatternOrVarId::CustomTypeVarId(guess_var_id) }
                         )
                     );
                     assert_eq!(guess_var_id, var_id);
                 }
-                Expr::ImplBlock { typ, const_exprs } => {
-                    let meta_type = self.check_annotation_meta_type_id(*typ, true);
+                // handled later in pass 2
+                Expr::ImplBlock { .. } => { }
 
-                    self.add_impl_scope(meta_type);
-                    self.collect_consts(const_exprs, false);
-                    self.remove_impl_scope(meta_type);
-
-                    resolved_impl_meta_types.insert(expr, meta_type);
-                    // println!("Added impl for type: {}", self.fmt_type(meta_type));
-                }
                 _ => if !allow_non_const {
                     self.error(ErrType::TyperRuntimeValuesArentAllowedInImplBlocks, self.ast.get_expr_span(expr));
                 }
             }
         }
 
+
+        // pass 2: `impl int { ... }`
+        let mut resolved_impl_meta_types = HashMap::new();
+        for &expr in exprs {
+            if let Expr::ImplBlock { typ, const_exprs } = self.ast.get_expr(expr) {
+                let meta_type = self.check_annotation_meta_type_id(*typ, true);
+                let meta_type = self.prune_id_once_infer_err(meta_type, self.ast.get_expr_span(expr));
+
+                self.curr_impl_self.push(meta_type);
+                self.collect_consts(const_exprs, false, DefineVarScope::Impl { typ: meta_type });
+                assert_eq!(self.curr_impl_self.pop(), Some(meta_type));
+
+                resolved_impl_meta_types.insert(expr, meta_type);
+                // println!("Added impl for type: {}", self.fmt_type(meta_type));
+            }
+        }
+
         resolved_impl_meta_types
     }
 
-    fn add_impl_scope(&mut self, meta_type: TypeId) {
-        let impl_scope_idx = self.var_scopes.len();
-        let self_before = self.curr_impl_self.replace((meta_type, impl_scope_idx));
-        debug_assert_eq!(self_before, None);
-
-        // add the impl-scope as a normal var scope,
-        // all consts will just end up in there then!1!!
-        let impl_scope = self.type_impls.remove(&meta_type).unwrap_or_default();
-        self.var_scopes.push(impl_scope);
-    }
-    fn remove_impl_scope(&mut self, meta_type: TypeId) {
-        // and insert the impl scope back to where it came from
-        let impl_scope = self.var_scopes.pop().unwrap();
-        self.type_impls.insert(meta_type, impl_scope);
-
-        self.curr_impl_self = None;
-    }
-
-
-    fn resolve_current_scope_consts(&mut self) {
-        while let Some((value, bind_to)) = self.var_scopes.last().unwrap()
-            .scope.values()
-            .find_map(|&var_id| {
-                if let TypeVarConstVal::NotYetTypechecked { value, bind_to } = self.typed_ast.get_var(var_id).const_val {
-                    Some((value, bind_to))
-                } else {
-                    None
+    fn resolve_scope_consts(&mut self, scope: DefineVarScope) {
+        // least cursed while loop
+        while let var_scope = match scope {
+                DefineVarScope::CurrScope => self.var_scopes.last().unwrap(),
+                DefineVarScope::Impl { typ } => match self.type_impls.get(&typ) {
+                    Some(s) => s,
+                    None => return
                 }
-            }) {
+            }
+        && let next = var_scope.scope.values()
+            .find_map(|&var_id| {
+                match self.typed_ast.get_var(var_id).const_val {
+                    TypeVarConstVal::NotYetTypechecked { value, bind_to } => Some((value, bind_to)),
+                    _ => None,
+                }
+            })
+        && let Some((value, bind_to)) = next {
             self.check_evaluate_and_bind_const(value, bind_to);
         }
     }
-
 
 
     #[allow(clippy::too_many_arguments, reason = "yes the function is bad, but it works for now")]
@@ -987,26 +982,20 @@ impl TypeChecker<'_> {
     fn check_type_impl_const(&mut self, type_id: TypeId, member: &str) -> Option<(VmValue, TypeId)> {
         let type_id = self.prune_id_once(type_id);
 
-        // if its currently inside an impl for this exact type, then the impl-scope was
-        // removed from `self.type_impls` and instead added to var_scopes, so use that one.
-        // (happens e.g. when int impls `clamp()`, which uses `int.max()`)
-        let scope = match self.curr_impl_self {
-            Some((impl_id, idx)) if impl_id == type_id => &self.var_scopes.get(idx)?.scope,
-            _ => &self.type_impls.get(&type_id)?.scope,
-        };
+        if let Some(scope) = self.type_impls.get(&type_id)
+        && let Some(&member_var) = scope.scope.get(member) {
+            // found a member!
 
-        let &member_var = scope.get(member)?;
-        // found a member!
+            self.resolve_const_val(member_var);
 
-        println!("const evaluate level {:?}", self.typed_ast.get_var(member_var).const_val);
-
-        self.resolve_const_val(member_var);
-
-        match &self.typed_ast.get_var(member_var).const_val {
-            TypeVarConstVal::Evaluated(constant) => {
-                Some((constant.clone(), self.make_var_id_ref(member_var, false)))
+            match &self.typed_ast.get_var(member_var).const_val {
+                TypeVarConstVal::Evaluated(constant) => {
+                    Some((constant.clone(), self.make_var_id_ref(member_var, false)))
+                }
+                other => unreachable!("{}.{member} had an unevaluated const... {other:?}", self.fmt_type(type_id))
             }
-            other => unreachable!("{}.{member} had an unevaluated const... {other:?}", self.fmt_type(type_id))
+        } else {
+            None
         }
     }
 

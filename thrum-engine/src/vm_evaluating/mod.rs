@@ -82,7 +82,7 @@ pub struct VM<'a> {
 }
 
 impl<'a> VM<'a> {
-    pub unsafe fn start(compiled_functions: &'a mut FunctionRegistry, type_arena: Option<&'a mut TypeArena>) -> Result<VmValue, ErrType> {
+    pub unsafe fn start(compiled_functions: &'a mut FunctionRegistry, type_arena: Option<&'a mut TypeArena>, entry_slot: usize) -> Result<VmValue, ErrType> {
         let mut vm = Self {
             compiled_functions,
             type_arena,
@@ -91,7 +91,7 @@ impl<'a> VM<'a> {
             // if it does, every Value::ValuePointer(*mut Value) breaks and unsafe behaviour happens :(
             value_stack: Vec::with_capacity(1024)
         };
-        vm.load_frame_from_index(0);
+        vm.load_frame_from_index(entry_slot);
         unsafe { vm.run(cfg!(debug_assertions)) }
     }
 
