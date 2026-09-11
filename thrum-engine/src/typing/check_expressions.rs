@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, ResolvedMemberAccess, ResolvedTypeInstantiation, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternVars, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
+    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, ResolvedMemberAccess, ResolvedTypeInstantiation, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternVars, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
 };
 
 
@@ -669,8 +669,9 @@ impl TypeChecker<'_> {
 
                     let guess_var_id = TypeVarId(self.typed_ast.vars.len().try_into().unwrap());
                     let var_id = self.define_variable(
-                        name, TypeId::TYPE, true, false, true, expr_span,
-                        TypeVarConstVal::NotYetTypechecked { value: *value, bind_to: PatternOrVarId::CustomTypeVarId(guess_var_id) }
+                        name, TypeId::TYPE, true, expr_span, DefineVarMode::Const(
+                            TypeVarConstVal::NotYetTypechecked { value: *value, bind_to: PatternOrVarId::CustomTypeVarId(guess_var_id) }
+                        )
                     );
                     assert_eq!(guess_var_id, var_id);
                 }

@@ -68,6 +68,11 @@ pub enum TypeVarIsUsed {
     No, Immut, Mut
 }
 
+pub enum DefineVarMode {
+    Const(TypeVarConstVal),
+    Var { mutable: bool, is_init: bool },
+}
+
 
 pub type SnapshotVarsState = HashMap<TypeVarId, TypeVarMemState>;
 
@@ -81,14 +86,14 @@ impl<'ast> TypeChecker<'ast> {
         self.var_scopes.pop().unwrap();
     }
 
-    pub(super) fn define_variable(&mut self, name: &'ast str, typ: TypeId, is_explicit: bool, mutable: bool, is_init: bool, span: Span, const_val: TypeVarConstVal) -> TypeVarId {
+    pub(super) fn define_variable(&mut self, name: &'ast str, typ: TypeId, explicit_type_anot: bool, span: Span, define_mode: DefineVarMode) -> TypeVarId {
         // a var cant be shadowed if its a const
-        let cant_shadow = const_val != TypeVarConstVal::No;
+        let (mutable, is_init, const_val, shadowable) = match define_mode {
+            DefineVarMode::Var { mutable, is_init } => (mutable, is_init, TypeVarConstVal::No, true),
+            DefineVarMode::Const(const_val) => (false, true, const_val, false)
+        };
 
-        // strip soft type info away
-        // e.g. `let x = Option.Some{ 3 }`  so x has type Option and not Option.?Some
-        // otherwise we would need a whole ControlFlowGraph for these soft specs because they can change across branches
-        let final_type = if is_explicit { typ } else { self.decay_soft_types(typ) };
+        let final_type = if explicit_type_anot { typ } else { self.decay_soft_types(typ) };
 
         let new_var = TypeVar {
             typ: final_type,
@@ -106,12 +111,13 @@ impl<'ast> TypeChecker<'ast> {
         self.typed_ast.vars.push(new_var);
         let previous = self.var_scopes.last_mut().unwrap().scope.insert(name, var_id);
 
-        if cant_shadow && previous.is_some() {
+        if !shadowable && previous.is_some() {
             self.error(ErrType::TyperConstNameAlreadyExists { name: name.to_string() }, span);
         }
 
         var_id
     }
+
 
     pub(super) fn lookup_variable(&mut self, name: &str) -> Option<TypeVarId> {
         for i in (0..self.var_scopes.len()).rev() {
@@ -467,7 +473,7 @@ impl<'ast> TypeChecker<'ast> {
         for (name, value) in &module.values {
             if value.is_prelude {
                 let id = self.type_arena.add_type(value.typ.clone());
-                self.define_variable(name, id, true, false, true, Span::invalid(), TypeVarConstVal::Evaluated(value.val.clone()));
+                self.define_variable(name, id, true, Span::invalid(), DefineVarMode::Const(TypeVarConstVal::Evaluated(value.val.clone())));
             }
         }
         // Recursion

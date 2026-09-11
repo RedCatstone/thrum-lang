@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use crate::{
-    ErrType, parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId},
-    typing::{Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::TypeVarConstVal},
-    vm_compiling::VmValue
+    ErrType, parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId}, typing::{Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, TypeVarConstVal}}, vm_compiling::VmValue
 };
 
 
@@ -25,7 +23,7 @@ impl<'ast> TypeChecker<'ast> {
         &mut self,
         pattern: PatternId,
         expected_type: Option<TypeId>,
-        is_explicit: bool,
+        explicit_type_anot: bool,
         has_value: bool,
         const_update: Option<TypeVarConstVal>,
         vars_defined: &mut CheckPatternVars<'ast, '_>
@@ -67,7 +65,7 @@ impl<'ast> TypeChecker<'ast> {
                             var.const_val = const_val;
                             existing_id
                         } else {
-                            self.define_variable(name, typ, is_explicit, *mutable, has_value, span, TypeVarConstVal::No)
+                            self.define_variable(name, typ, explicit_type_anot, span, DefineVarMode::Var { mutable: *mutable, is_init: has_value })
                         };
 
                         self.typed_ast.resolved_pattern_var.insert(pattern, var_id);
@@ -92,7 +90,7 @@ impl<'ast> TypeChecker<'ast> {
                     };
 
                     let (typ, covered) = self.check_match_pattern(
-                        *p, elem_expected_type, is_explicit, has_value, const_update.clone(), vars_defined
+                        *p, elem_expected_type, explicit_type_anot, has_value, const_update.clone(), vars_defined
                     );
                     tuple_types.push(TypeTuple { label: label.clone(), typ });
                     tuple_covered_cases.push(covered);
@@ -108,7 +106,7 @@ impl<'ast> TypeChecker<'ast> {
                 // VALID: "...{_} {_}..."
                 // VALID: "...{_}..."
                 for (i, (hole_pat, after)) in hole_parts.iter().enumerate() {
-                    self.check_match_pattern(*hole_pat, Some(TypeId::STR), is_explicit, has_value, const_update.clone(), vars_defined);
+                    self.check_match_pattern(*hole_pat, Some(TypeId::STR), explicit_type_anot, has_value, const_update.clone(), vars_defined);
 
                     if i != hole_parts.len() - 1 && after.is_empty() {
                         self.error(ErrType::TyperPatternStringHolesInARow, span);
@@ -125,7 +123,7 @@ impl<'ast> TypeChecker<'ast> {
             Pattern::Not(pat) => {
                 let mut inner_vars = Vec::new();
                 let (typ, covered) = self.check_match_pattern(
-                    *pat, expected_type, is_explicit, has_value, const_update,
+                    *pat, expected_type, explicit_type_anot, has_value, const_update,
                     &mut CheckPatternVars::Collect(&mut inner_vars)
                 );
 
@@ -150,7 +148,7 @@ impl<'ast> TypeChecker<'ast> {
                 let mut or_vars_defined = Vec::new();
                 // check the first pattern normal
                 let (mut first_type, covered) = self.check_match_pattern(
-                    first_pattern, expected_type, is_explicit, has_value, const_update.clone(), &mut CheckPatternVars::Collect(&mut or_vars_defined)
+                    first_pattern, expected_type, explicit_type_anot, has_value, const_update.clone(), &mut CheckPatternVars::Collect(&mut or_vars_defined)
                 );
                 covered_cases.extend(covered);
 
@@ -160,7 +158,7 @@ impl<'ast> TypeChecker<'ast> {
                     let mut expected_vars = first_pattern_vars.clone();
                     let mut bound_too_many = Vec::new();
                     let (typ, covered) = self.check_match_pattern(
-                        p, expected_type, is_explicit, has_value, const_update.clone(),
+                        p, expected_type, explicit_type_anot, has_value, const_update.clone(),
                         &mut CheckPatternVars::Expect { vars: &mut expected_vars, bound_too_many: &mut bound_too_many }
                     );
                     covered_cases.extend(covered);
@@ -181,7 +179,7 @@ impl<'ast> TypeChecker<'ast> {
             }
 
             Pattern::Conditional { pattern: p, cond } => {
-                let (typ, _) = self.check_match_pattern(*p, expected_type, is_explicit, has_value, const_update, vars_defined);
+                let (typ, _) = self.check_match_pattern(*p, expected_type, explicit_type_anot, has_value, const_update, vars_defined);
                 self.check_expression(*cond, &mut false, CheckExprCtx::default().expect(TypeId::BOOL));
 
                 typ
@@ -200,7 +198,7 @@ impl<'ast> TypeChecker<'ast> {
                                 // if it expects a tuple, e.g. `type Point = { num, num }`
                                 // then just typecheck normally. (`data` is already a tuple expr)
                                 let (typ, covered) = self.check_match_pattern(
-                                    *data, Some(inner_new_type), is_explicit, has_value, const_update, vars_defined
+                                    *data, Some(inner_new_type), explicit_type_anot, has_value, const_update, vars_defined
                                 );
                                 covered_cases = covered;
                                 typ
@@ -213,7 +211,7 @@ impl<'ast> TypeChecker<'ast> {
                                 if let [first] = elems.as_slice() && first.label == "0" {
                                     self.typed_ast.resolved_type_destruction_not_a_tuple.insert(pattern);
                                     let (typ, covered) = self.check_match_pattern(
-                                        first.pattern, Some(inner_new_type), is_explicit, has_value, const_update, vars_defined
+                                        first.pattern, Some(inner_new_type), explicit_type_anot, has_value, const_update, vars_defined
                                     );
                                     covered_cases = covered;
                                     typ
@@ -262,7 +260,7 @@ impl<'ast> TypeChecker<'ast> {
                     // now that we found a variant, handle the inner data
 
                     let inner_covered = if let Some(tup) = attached_tuple {
-                        self.check_match_pattern(*tup, Some(attached_type), is_explicit, has_value, const_update, vars_defined).1
+                        self.check_match_pattern(*tup, Some(attached_type), explicit_type_anot, has_value, const_update, vars_defined).1
                     } else {
                         self.unify_types(TypeId::VOID, attached_type, span, UnifyMode::Subtype);
                         vec![PatternSpace::All]
@@ -407,7 +405,7 @@ impl<'ast> TypeChecker<'ast> {
                     self.typed_ast.get_var_mut(*var_id).const_val = const_val;
                 } else {
                     // pattern var doesn't exist so make one
-                    let var_id = self.define_variable(name, TypeId::VOID, true, false, true, span, const_val);
+                    let var_id = self.define_variable(name, TypeId::VOID, true, span, DefineVarMode::Const(const_val));
                     self.typed_ast.resolved_pattern_var.insert(pattern, var_id);
 
                     if *mutable {

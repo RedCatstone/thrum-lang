@@ -257,7 +257,7 @@ impl<'a> VM<'a> {
                     let VmValue::ValuePointer(arr_pointer) = self.value_stack.pop().unwrap() else { unreachable!() };
                     let VmValue::Tup(tup) = (unsafe { &mut *arr_pointer }) else { unreachable!() };
 
-                    let i_usize = i as usize;
+                    let i_usize = usize::try_from(i).unwrap();
                     if i < 0 || i_usize >= tup.len() {
                         return Err(ErrType::RuntimeError { msg: format!("Index {i_usize} is out of bounds for arr of length {}.", tup.len()) });
                     }
