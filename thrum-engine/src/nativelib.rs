@@ -12,6 +12,7 @@ pub struct ThrumValue {
 pub struct ThrumModule {
     pub sub_modules: HashMap<String, Self>,
     pub values: HashMap<String, ThrumValue>,
+    pub type_impls: HashMap<TypeId, HashMap<String, ThrumValue>>
 }
 
 
@@ -36,6 +37,14 @@ pub fn get_native_lib(_type_arena: &mut TypeArena) -> ThrumModule {
     std_module.values.insert("float".to_string(), ThrumValue { typ: Type::MetaType, val: VmValue::Type(TypeId::FLOAT), is_prelude: true });
     std_module.values.insert("bool".to_string(), ThrumValue { typ: Type::MetaType, val: VmValue::Type(TypeId::BOOL), is_prelude: true });
     std_module.values.insert("str".to_string(), ThrumValue { typ: Type::MetaType, val: VmValue::Type(TypeId::STR), is_prelude: true });
+
+    let mut str_methods = HashMap::new();
+    str_methods.insert("len".to_string(), ThrumValue {
+        typ: Type::Fn { param_types: vec![TypeId::STR], return_type: TypeId::STR },
+        val: VmValue::NativeFn(native_str_len),
+        is_prelude: true
+    });
+    std_module.type_impls.insert(TypeId::STR, str_methods);
 
     std_module
 }

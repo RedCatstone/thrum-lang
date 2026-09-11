@@ -498,6 +498,17 @@ impl<'ast> TypeChecker<'ast> {
                 );
             }
         }
+
+        for (&type_id, impls) in &module.type_impls {
+            for (name, impl_) in impls {
+                let fn_type = self.type_arena.add_type(impl_.typ.clone());
+                self.define_variable(
+                    name, fn_type, true, Span::invalid(), DefineVarScope::Impl { typ: type_id },
+                    DefineVarMode::Const(TypeVarConstVal::Evaluated(impl_.val.clone()))
+                );
+            }
+        }
+
         // Recursion
         for sub_module in module.sub_modules.values() {
             self.load_prelude_from_lib(sub_module);
