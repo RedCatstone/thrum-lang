@@ -1,13 +1,11 @@
 // run me by doing `cargo run Code.thrum`
 
-impl A {
-    const ONE = B.TWO
-    const THREE = 1
-}
-impl B {
-    const TWO = A.THREE
-}
-type A = int;
-type B = int;
+// fn pow(self: int, p: int) -> int => {
+//     let mut total = 1;
+//     for i in 0..p => total *= self
+//     total
+// }
 
-A.ONE^^^
+// pow(2, 3)
+
+(x = 2)

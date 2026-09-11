@@ -50,11 +50,17 @@ pub struct ParserCtx {
 
 #[derive(PartialEq)]
 /// The language only has a parser distinction between statements and expressions.
-/// Just because it dissallows more bogus code like `let x = let y = 3` and so it stops
+/// It does that so it can dissallow more bogus code like `let x = let y = 3` and so it stops
 /// parsing infix operators after e.g. `impl {}` or `fn ...`.
 pub enum StmtKind {
-    Stmt, Expr, Let, NestedLet
+    Stmt,     // let, const, type, impl, fn, ensure
+    Assign,   // `x = 5` (extra category because its allowed in `=> ...` but not in `some_func(x = 5)`)
+    Expr,
+    Let,      // `let x`
+    NestedLet // `(let a, b)`
 }
+#[derive(PartialEq, Clone, Copy)]
+pub enum AllowStmt { Nop, AssignOnly, Yep }
 
 
 impl Parser<'_> {
@@ -63,10 +69,10 @@ impl Parser<'_> {
     }
 
     pub(super) fn parse_expression(&mut self, precedence: Precedence, ctx: ParserCtx) -> ExprId {
-        self.parse_expression_or_statement(precedence, ctx, false).0
+        self.parse_expression_or_statement(precedence, ctx, AllowStmt::Nop).0
     }
 
-    pub(super) fn parse_expression_or_statement(&mut self, precedence: Precedence, ctx: ParserCtx, allow_stmt: bool) -> (ExprId, StmtKind) {
+    pub(super) fn parse_expression_or_statement(&mut self, precedence: Precedence, ctx: ParserCtx, allow_stmt: AllowStmt) -> (ExprId, StmtKind) {
         // examples of prefixes:
         // 1
         // !(1 + 2)
@@ -79,7 +85,7 @@ impl Parser<'_> {
             let peek_op = self.peek().clone();
 
             match is_stmt {
-                StmtKind::Stmt => break, // statements (x = 2, fn ...) can't consume infix operators
+                StmtKind::Stmt | StmtKind::Assign => break, // statements (x = 2, fn ...) can't consume infix operators
                 StmtKind::Let | StmtKind::NestedLet
                 // `let` or `(let a, b)` can ONLY be followed by `=`
                 if peek_op.token != (TokenKind::Assign { extra_op: None }) => break,
@@ -134,8 +140,9 @@ impl Parser<'_> {
             (left_expr, is_stmt) = self.parse_infix(left_expr, &peek_op, op_precedence, ctx);
         }
 
-
-        if (!allow_stmt && is_stmt != StmtKind::Expr) || is_stmt == StmtKind::NestedLet {
+        if (allow_stmt == AllowStmt::Nop && is_stmt != StmtKind::Expr)
+        || (allow_stmt == AllowStmt::AssignOnly && matches!(is_stmt, StmtKind::Stmt | StmtKind::Let))
+        || is_stmt == StmtKind::NestedLet {
             // not allowed in expression context (e.g. `some_func((let a, let b))`, `1 + let x`)
             // or plain `(let a, let b)` without `=`
             self.error_with_span(ErrType::ParserOnlyAllowedInStatementPosition, self.ast.get_expr_span(left_expr));
@@ -171,7 +178,7 @@ impl Parser<'_> {
             }
 
             TokenKind::Assign { extra_op } => {
-                is_stmt = StmtKind::Stmt;
+                is_stmt = if let StmtKind::Let | StmtKind::NestedLet = is_stmt { StmtKind::Stmt } else { StmtKind::Assign };
                 let pattern = self.convert_expr_into_assign_pattern(left_expr);
                 let value = self.parse_expression_default(ctx);
 
@@ -523,7 +530,7 @@ impl Parser<'_> {
             if !self.peek_is_on_same_line() {
                 self.error(ErrType::ParserArrowExprsHaveToBeOnSameLine);
             }
-            let expr = self.parse_expression_default(ctx);
+            let expr = self.parse_expression_or_statement(Precedence::Lowest, ctx, AllowStmt::AssignOnly).0;
             self.add_expr(self.prev_token_span, Expr::Block { exprs: vec![expr], label: None })
         }
         else if self.optional_token(TokenKind::LeftBrace) {
@@ -606,7 +613,7 @@ impl Parser<'_> {
         let (label, expr) = self.parse_tuple_item(
             default_label,
             |p| {
-                let (expr, stmt) = p.parse_expression_or_statement(Precedence::Lowest, ParserCtx { stop_on_newline_is: false }, true);
+                let (expr, stmt) = p.parse_expression_or_statement(Precedence::Lowest, ParserCtx { stop_on_newline_is: false }, AllowStmt::Yep);
                 elem_stmt = stmt;
                 expr
             },

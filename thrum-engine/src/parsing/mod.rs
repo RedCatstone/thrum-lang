@@ -1,4 +1,9 @@
-use crate::{ErrType, ProgramError, ProgramErrorData, WarnType, lexing::{self, tokens::{AssignOp, Span, TokenKind, TokenSpan}}, parsing::{ast::{AstArena, Expr, ExprId, Pattern, PatternId}, parse_expressions::{ParserCtx, Precedence}}};
+use crate::{
+    ErrType, ProgramError, ProgramErrorData, WarnType,
+    lexing::{self, tokens::{AssignOp, Span, TokenKind, TokenSpan}},
+    parsing::{ast::{AstArena, Expr, ExprId, Pattern, PatternId},
+    parse_expressions::{AllowStmt, ParserCtx, Precedence}}
+};
 
 pub mod ast;
 pub mod desugar;
@@ -182,7 +187,7 @@ impl<'a> Parser<'a> {
         while self.peek().token != end_token && self.peek().token != TokenKind::EndOfFile {
             // this allows statement positions, because this function
             // is only used in parsing multiple {}-block expressions.
-            let (expr, _) = self.parse_expression_or_statement(Precedence::Lowest, parse_ctx, true);
+            let (expr, _) = self.parse_expression_or_statement(Precedence::Lowest, parse_ctx, AllowStmt::Yep);
             list.push(expr);
             if self.optional_token(TokenKind::Semicolon) {
                 if add_semicolon_expr {

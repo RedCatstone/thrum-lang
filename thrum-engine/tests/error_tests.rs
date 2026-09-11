@@ -28,6 +28,7 @@ mod common;
     test_err!("fn fn none() { } 2", ErrType::MultipleExprsWithoutSemicolon);
 
     test_err!("(let a)", ErrType::ParserOnlyAllowedInStatementPosition);
+    test_err!("(x = 2)", ErrType::ParserOnlyAllowedInStatementPosition);
     test_err!("(let a, let b)", ErrType::ParserOnlyAllowedInStatementPosition);
     test_err!("2 + (let a, let b)", ErrType::ParserOnlyAllowedInStatementPosition);
 }

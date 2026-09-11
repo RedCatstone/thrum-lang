@@ -160,22 +160,18 @@ mod common;
 #[test] fn for_loop() {
     test!("
         let mut sum = 0;
-        for x in 0..10 {
-            sum += x
-        }
+        for x in 0..10 => sum += x
         sum^
     ", VmValue::Int(45));
 
     test!("
         let mut sum = 0;
-        for x in 0..=10 {
-            sum += x
-        }
+        for x in 0..=10 => sum += x
         sum^
     ", VmValue::Int(55));
 
-    test!("let mut sum = 0; for x in 10..10 { sum = x^ }; sum^", VmValue::Int(0));
-    test!("let mut sum = 0; for x in 10..=10 { sum = x^ }; sum^", VmValue::Int(10));
+    test!("let mut sum = 0; for x in 10..10 => sum = x^; sum^", VmValue::Int(0));
+    test!("let mut sum = 0; for x in 10..=10 => sum = x^; sum^", VmValue::Int(10));
 }
 
 

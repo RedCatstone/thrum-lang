@@ -19,9 +19,7 @@ impl int {
     fn clamp(self: Self, min: Self, max: Self) -> Self => self.max(min).min(max)
     fn pow(self: Self, p: Self) -> Self => {
         let mut total = 1;
-        for i in 0..p {
-            total *= self
-        }
+        for _ in 0..p => total *= self
         total
     }
 }
