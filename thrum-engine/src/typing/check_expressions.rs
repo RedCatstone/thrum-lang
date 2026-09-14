@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, ResolvedMemberAccess, ResolvedTypeInstantiation, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternVars, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
+    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, ResolvedMemberAccess, ResolvedTypeInstantiation, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternCtx, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
 };
 
 
@@ -259,8 +259,8 @@ impl TypeChecker<'_> {
                 for arm in arms {
                     self.enter_scope();
 
-                    let (_, arm_covered) = self.check_match_pattern(
-                        arm.pattern, Some(match_val_type), false, true, None, &mut CheckPatternVars::Collect(&mut Vec::new())
+                    let (_, arm_covered) = self.check_match_pattern(arm.pattern,
+                        CheckPatternCtx::new(Some(match_val_type), true, &mut HashMap::new(), None)
                     );
                     covered_cases.extend(arm_covered);
 
@@ -728,7 +728,8 @@ impl TypeChecker<'_> {
     pub(super) fn check_assign_pattern_and_value(
         &mut self, pattern: PatternId, value: Option<ExprId>,
         is_never: &mut bool, can_bind_vars: bool, can_fail: bool, fully_deref_value: bool,
-        const_update: Option<TypeVarConstVal>
+        // while typechecking this can update consts to NotYetEvaluated
+        const_update: Option<&TypeVarConstVal>
     ) -> TypeId {
         let explicit_type = self.get_pattern_type(pattern);
         let mut pattern_type = explicit_type;
@@ -750,10 +751,9 @@ impl TypeChecker<'_> {
             }
         }
 
-        let mut vars_defined = Vec::new();
-        let (pattern_type, covered) = self.check_match_pattern(
-            pattern, pattern_type, false, value.is_some(), const_update,
-            &mut CheckPatternVars::Collect(&mut vars_defined)
+        let mut vars_defined = HashMap::new();
+        let (pattern_type, covered) = self.check_match_pattern(pattern,
+            CheckPatternCtx::new(pattern_type, value.is_some(), &mut vars_defined, const_update)
         );
 
         let span = self.ast.get_pattern_span(pattern);
@@ -806,8 +806,8 @@ impl TypeChecker<'_> {
         assert_eq!(param_types.len(), closure.params.len());
 
         for (&param_pattern, param_type) in closure.params.iter().zip(param_types) {
-            let (_, covered) = self.check_match_pattern(
-                param_pattern, Some(param_type), false, true, None, &mut CheckPatternVars::Collect(&mut Vec::new())
+            let (_, covered) = self.check_match_pattern(param_pattern,
+                CheckPatternCtx::new(Some(param_type), true, &mut HashMap::new(), None)
             );
             let remaining = PatternSpace::covered_to_missing_cases(&covered, &self.typed_ast.enum_defs);
             if !remaining.is_empty() {

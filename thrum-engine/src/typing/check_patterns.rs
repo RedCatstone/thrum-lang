@@ -1,33 +1,48 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::{
-    ErrType, parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId}, typing::{Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}}, vm_compiling::VmValue
+    ErrType, parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId},
+    typing::{Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}},
+    vm_compiling::VmValue
 };
 
+pub struct CheckPatternCtx<'ast, 'short> {
+    expected_type: Option<TypeId>,
+    explicit_type_anot: bool,
+    has_value: bool,
+    const_update: Option<&'short TypeVarConstVal>,
+    vars_defined: &'short mut HashMap<&'ast str, TypeVarId>,
+    or_pattern_expects_vars: Option<&'short HashMap<&'ast str, TypeVarId>>,
+}
+impl<'ast, 'short> CheckPatternCtx<'ast, 'short> {
+    pub const fn new(expected_type: Option<TypeId>, has_value: bool, vars_defined: &'short mut HashMap<&'ast str, TypeVarId>, const_update: Option<&'short TypeVarConstVal>) -> Self {
+        CheckPatternCtx {
+            expected_type, has_value, const_update, vars_defined,
+            explicit_type_anot: false,
+            or_pattern_expects_vars: None
+        }
+    }
 
-// the 'ast lifetime lives as long as the TypeChecker itself
-// and 'short is just short
-pub enum CheckPatternVars<'ast, 'short> {
-    Collect(&'short mut Vec<(&'ast str, TypeVarId)>),
-    // every piece of an Or-pattern needs to define the exact same TypevarIds.
-    Expect {
-        // this has the expected vars from the first Or-pattern in it.
-        vars: &'short mut HashMap<&'ast str, TypeVarId>,
-        // if a pattern binds a variable that is not in the hashmap, its name gets added to here for a combined error message.
-        bound_too_many: &'short mut Vec<&'ast str>
+    const fn with_expected(&mut self, expected: Option<TypeId>) -> CheckPatternCtx<'ast, '_> {
+        CheckPatternCtx { expected_type: expected, ..self.reborrow() }
+    }
+    const fn with_explicit_type_anot(&mut self) -> CheckPatternCtx<'ast, '_> {
+        CheckPatternCtx { explicit_type_anot: true, ..self.reborrow() }
+    }
+    const fn with_or_pattern_expects_vars<'r>(&'r mut self, or_pattern_expects_vars: &'r HashMap<&'ast str, TypeVarId>) -> CheckPatternCtx<'ast, 'r> {
+        CheckPatternCtx { or_pattern_expects_vars: Some(or_pattern_expects_vars), ..self.reborrow() }
+    }
+    const fn with_vars_defined<'r>(&'r mut self, vars_defined: &'r mut HashMap<&'ast str, TypeVarId>) -> CheckPatternCtx<'ast, 'r> {
+        CheckPatternCtx { vars_defined, ..self.reborrow() }
+    }
+    /// kind of a hack to get around the borrow checker
+    const fn reborrow<'r>(&'r mut self) -> CheckPatternCtx<'ast, 'r> {
+        CheckPatternCtx { vars_defined: self.vars_defined, or_pattern_expects_vars: self.or_pattern_expects_vars, ..*self }
     }
 }
 
 
 impl<'ast> TypeChecker<'ast> {
-    pub(super) fn check_match_pattern(
-        &mut self,
-        pattern: PatternId,
-        expected_type: Option<TypeId>,
-        explicit_type_anot: bool,
-        has_value: bool,
-        const_update: Option<TypeVarConstVal>,
-        vars_defined: &mut CheckPatternVars<'ast, '_>
-    ) -> (TypeId, Vec<PatternSpace>) {
+    pub(super) fn check_match_pattern(&mut self, pattern: PatternId, mut ctx: CheckPatternCtx<'ast, '_>) -> (TypeId, Vec<PatternSpace>) {
         let span = self.ast.get_pattern_span(pattern);
         let pattern_pattern = self.ast.get_pattern(pattern);
 
@@ -38,51 +53,44 @@ impl<'ast> TypeChecker<'ast> {
                 // bindings can't fail, so any case is covered here now.
                 covered_cases.push(PatternSpace::All);
 
-                match vars_defined {
-                    // if an Or-pattern expects vars to be defined,
-                    // then it needs to make sure that the exact same variables with the same VarIDs are defined.
-
-                    CheckPatternVars::Expect { vars, bound_too_many } => {
-                        // Expect means that it already checked the first pattern of the OR-chain and its now expecting vars
-                        if let Some(var_id) = vars.remove(&**name) {
-                            self.typed_ast.resolved_pattern_var.insert(pattern, var_id);
-                            self.typed_ast.vars[var_id.0 as usize].typ
-                        } else {
-                            bound_too_many.push(name);
-                            TypeId::ERROR
-                        }
+                let (var_id, typ) = if let Some(or_pattern_expects_vars) = ctx.or_pattern_expects_vars
+                    && let Some(var_id) = or_pattern_expects_vars.get(&**name) {
+                        (*var_id, self.typed_ast.get_var(*var_id).typ)
                     }
-                    CheckPatternVars::Collect(vars) => {
-                        // we are parsing the first OR-pattern (or no OR-pattern)
-                        let typ = expected_type.unwrap_or_else(|| self.new_infer_type());
+                    else {
+                        let typ = ctx.expected_type.unwrap_or_else(|| self.new_infer_type());
 
-                        let var_id = if let Some(const_val) = const_update {
+                        let var_id = if let Some(const_val) = ctx.const_update {
                             // if we are checking a const pattern, e.g. `const x = 5`
                             // it already knows about `x` and just needs to update it
                             let existing_id = self.typed_ast.resolved_pattern_var[&pattern];
                             let var = self.typed_ast.get_var_mut(existing_id);
                             var.typ = typ;
-                            var.const_val = const_val;
+                            var.const_val = const_val.clone();
                             existing_id
                         } else {
                             self.define_variable(
-                                name, typ, explicit_type_anot, span, DefineVarScope::CurrScope,
-                                DefineVarMode::Var { mutable: *mutable, is_init: has_value }
+                                name, typ, ctx.explicit_type_anot, span, DefineVarScope::CurrScope,
+                                DefineVarMode::Var { mutable: *mutable, is_init: ctx.has_value }
                             )
                         };
+                        (var_id, typ)
+                    };
 
-                        self.typed_ast.resolved_pattern_var.insert(pattern, var_id);
-                        vars.push((name, var_id));
-                        typ
-                    }
+                self.typed_ast.resolved_pattern_var.insert(pattern, var_id);
+                let old_var = ctx.vars_defined.insert(name, var_id);
+                if old_var.is_some() {
+                    self.error(ErrType::TyperOrPatternAlreadyBound { var: self.typed_ast.get_var(var_id).clone() }, span);
                 }
+
+                typ
             }
 
             Pattern::Tuple(elems) => {
                 let mut tuple_types = Vec::new();
                 let mut tuple_covered_cases = Vec::new();
 
-                let pruned_expected = expected_type.map(|t| self.prune_type_once(t));
+                let pruned_expected = ctx.expected_type.map(|t| self.prune_type_once(t));
 
                 for AstTuplePattern { label, pattern: p } in elems {
                     let elem_expected_type = match &pruned_expected {
@@ -92,9 +100,7 @@ impl<'ast> TypeChecker<'ast> {
                         _ => None
                     };
 
-                    let (typ, covered) = self.check_match_pattern(
-                        *p, elem_expected_type, explicit_type_anot, has_value, const_update.clone(), vars_defined
-                    );
+                    let (typ, covered) = self.check_match_pattern(*p, ctx.with_expected(elem_expected_type));
                     tuple_types.push(TypeTuple { label: label.clone(), typ });
                     tuple_covered_cases.push(covered);
                 }
@@ -109,7 +115,7 @@ impl<'ast> TypeChecker<'ast> {
                 // VALID: "...{_} {_}..."
                 // VALID: "...{_}..."
                 for (i, (hole_pat, after)) in hole_parts.iter().enumerate() {
-                    self.check_match_pattern(*hole_pat, Some(TypeId::STR), explicit_type_anot, has_value, const_update.clone(), vars_defined);
+                    self.check_match_pattern(*hole_pat, ctx.with_expected(Some(TypeId::STR)));
 
                     if i != hole_parts.len() - 1 && after.is_empty() {
                         self.error(ErrType::TyperPatternStringHolesInARow, span);
@@ -124,13 +130,10 @@ impl<'ast> TypeChecker<'ast> {
             }
 
             Pattern::Not(pat) => {
-                let mut inner_vars = Vec::new();
-                let (typ, covered) = self.check_match_pattern(
-                    *pat, expected_type, explicit_type_anot, has_value, const_update,
-                    &mut CheckPatternVars::Collect(&mut inner_vars)
-                );
+                let mut vars_defined = HashMap::new();
+                let (typ, covered) = self.check_match_pattern(*pat, ctx.with_vars_defined(&mut vars_defined));
 
-                if !inner_vars.is_empty() {
+                if !vars_defined.is_empty() {
                     // it doesn't make sense for a not-pattern to bind vars.
                     // even something double-negated like `... is let !(!x, 5)`
                     // means either bind x OR 2nd is not 5, which doesn't make sense.
@@ -148,41 +151,40 @@ impl<'ast> TypeChecker<'ast> {
                 let (&first_pattern, other_patterns) = inner_patterns.split_first()
                     .expect("Parser makes sure that there are always at least 2 patterns here");
 
-                let mut or_vars_defined = Vec::new();
+                let mut first_pattern_vars = HashMap::new();
                 // check the first pattern normal
-                let (mut first_type, covered) = self.check_match_pattern(
-                    first_pattern, expected_type, explicit_type_anot, has_value, const_update.clone(), &mut CheckPatternVars::Collect(&mut or_vars_defined)
-                );
+                let (mut first_type, covered) = self.check_match_pattern(first_pattern, ctx.with_vars_defined(&mut first_pattern_vars));
                 covered_cases.extend(covered);
 
-                let first_pattern_vars: HashMap<&str, TypeVarId> = or_vars_defined.into_iter().collect();
-
                 for &p in other_patterns {
-                    let mut expected_vars = first_pattern_vars.clone();
-                    let mut bound_too_many = Vec::new();
+                    let expected_vars = first_pattern_vars.clone();
+                    let mut vars_defined = HashMap::new();
                     let (typ, covered) = self.check_match_pattern(
-                        p, expected_type, explicit_type_anot, has_value, const_update.clone(),
-                        &mut CheckPatternVars::Expect { vars: &mut expected_vars, bound_too_many: &mut bound_too_many }
+                        p, ctx.with_or_pattern_expects_vars(&expected_vars).with_vars_defined(&mut vars_defined)
                     );
                     covered_cases.extend(covered);
                     first_type = self.unify_types(first_type, typ, span, UnifyMode::FindParentType);
 
-                    if !expected_vars.is_empty() {
-                        self.error(ErrType::TyperOrPatternDoesntBindVars { vars:
-                            expected_vars.into_keys().map(str::to_string).collect()
-                        }, span);
-                    }
-                    if !bound_too_many.is_empty() {
-                        self.error(ErrType::TyperOrPatternBindsVarsTooMuch { vars:
-                            bound_too_many.into_iter().map(str::to_string).collect()
-                        }, span);
+                    if expected_vars != vars_defined {
+                        let expected_set: HashSet<&str> = expected_vars.into_keys().collect();
+                        let this_set: HashSet<&str> = vars_defined.into_keys().collect();
+
+                        let didnt_bind: Vec<String> = expected_set.difference(&this_set).map(std::string::ToString::to_string).collect();
+                        let too_much: Vec<String> = this_set.difference(&expected_set).map(std::string::ToString::to_string).collect();
+
+                        if !didnt_bind.is_empty() {
+                            self.error(ErrType::TyperOrPatternDoesntBindVars { vars: didnt_bind }, span);
+                        }
+                        if !too_much.is_empty() {
+                            self.error(ErrType::TyperOrPatternBindsVarsTooMuch { vars: too_much }, span);
+                        }
                     }
                 }
                 first_type
             }
 
             Pattern::Conditional { pattern: p, cond } => {
-                let (typ, _) = self.check_match_pattern(*p, expected_type, explicit_type_anot, has_value, const_update, vars_defined);
+                let (typ, _) = self.check_match_pattern(*p, ctx.reborrow());
                 self.check_expression(*cond, &mut false, CheckExprCtx::default().expect(TypeId::BOOL));
 
                 typ
@@ -201,7 +203,7 @@ impl<'ast> TypeChecker<'ast> {
                                 // if it expects a tuple, e.g. `type Point = { num, num }`
                                 // then just typecheck normally. (`data` is already a tuple expr)
                                 let (typ, covered) = self.check_match_pattern(
-                                    *data, Some(inner_new_type), explicit_type_anot, has_value, const_update, vars_defined
+                                    *data, ctx.with_expected(Some(inner_new_type))
                                 );
                                 covered_cases = covered;
                                 typ
@@ -214,7 +216,7 @@ impl<'ast> TypeChecker<'ast> {
                                 if let [first] = elems.as_slice() && first.label == "0" {
                                     self.typed_ast.resolved_type_destruction_not_a_tuple.insert(pattern);
                                     let (typ, covered) = self.check_match_pattern(
-                                        first.pattern, Some(inner_new_type), explicit_type_anot, has_value, const_update, vars_defined
+                                        first.pattern, ctx.with_expected(Some(inner_new_type))
                                     );
                                     covered_cases = covered;
                                     typ
@@ -238,7 +240,7 @@ impl<'ast> TypeChecker<'ast> {
 
                 // using `.Variant` syntax requires that the Typechecker knows the Enumtype.
                 let resolved_variant =
-                    if let Some(expected) = expected_type
+                    if let Some(expected) = ctx.expected_type
                     && let Type::EnumVariant { inner, variant } = self.prune_type_once(expected) {
                         // its a hard refined enum
                         // e.g. `let .Some{ inner } = Option.Some{ 123 }`
@@ -255,7 +257,7 @@ impl<'ast> TypeChecker<'ast> {
                         Some((enum_id, variant, attached_type, expected))
                     }
                     else {
-                        self.check_enum_variant(name, expected_type, Some(span))
+                        self.check_enum_variant(name, ctx.expected_type, Some(span))
                     };
 
 
@@ -263,7 +265,7 @@ impl<'ast> TypeChecker<'ast> {
                     // now that we found a variant, handle the inner data
 
                     let inner_covered = if let Some(tup) = attached_tuple {
-                        self.check_match_pattern(*tup, Some(attached_type), explicit_type_anot, has_value, const_update, vars_defined).1
+                        self.check_match_pattern(*tup, ctx.with_expected(Some(attached_type))).1
                     } else {
                         self.unify_types(TypeId::VOID, attached_type, span, UnifyMode::Subtype);
                         vec![PatternSpace::All]
@@ -290,14 +292,12 @@ impl<'ast> TypeChecker<'ast> {
                 match self.ast.get_expr(*expr) {
                     Expr::Literal { val: AstValue::Bool(b) } => covered_cases.push(PatternSpace::Bool(*b)),
                     Expr::IdentifierRef { .. } => {
-                        if let Some(var_id) = self.typed_ast.resolved_expr_var.get(expr) {
-                            let var = self.typed_ast.get_var(*var_id);
-                            if let TypeVarConstVal::Evaluated(val) = &var.const_val {
-                                #[allow(clippy::collapsible_match, clippy::single_match)]
-                                match val {
-                                    VmValue::Bool(b) => covered_cases.push(PatternSpace::Bool(*b)),
-                                    _ => {}
-                                }
+                        if let Some(var_id) = self.typed_ast.resolved_expr_var.get(expr)
+                        && let TypeVarConstVal::Evaluated(val) = &self.typed_ast.get_var(*var_id).const_val {
+                            #[allow(clippy::collapsible_match, clippy::single_match)]
+                            match val {
+                                VmValue::Bool(b) => covered_cases.push(PatternSpace::Bool(*b)),
+                                _ => {}
                             }
                         }
                     }
@@ -330,16 +330,14 @@ impl<'ast> TypeChecker<'ast> {
             // then the expr with that type
             // then the full pattern with that type, so no need here
             Pattern::Typed { pattern, typ: _ } => {
-                let (pattern_typ, covered) = self.check_match_pattern(
-                    *pattern, expected_type, true, has_value, const_update, vars_defined
-                );
+                let (pattern_typ, covered) = self.check_match_pattern(*pattern, ctx.with_explicit_type_anot());
                 covered_cases.extend(covered);
                 // self.unify_types(typ, other, span);
                 pattern_typ
             }
         };
 
-        if let Some(expected) = expected_type {
+        if let Some(expected) = ctx.expected_type {
             self.unify_types(expected, inferred_type, span, UnifyMode::Subtype);
         }
 

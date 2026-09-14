@@ -106,16 +106,20 @@ pub enum ErrType {
     TyperCantCallNonFnType { typ: String, },
     #[display("member .{member} does not exist on type: {typ}")]
     TyperTypeDoesntHaveMember { typ: String, member: String },
-    #[display("<never> is not allowed in patterns.")]
-    TyperPatternNeverType,
-    #[display("All or-patterns must bind the same variables. This pattern binds {}.", slice_to_string(vars, ", "))]
+
+    #[display("Pattern already bound {var}")]
+    TyperOrPatternAlreadyBound { var: TypeVar },
+    #[display("All or-patterns must bind the same variables. This pattern doesn't bind {}.", slice_to_string(vars, ", "))]
     TyperOrPatternBindsVarsTooMuch { vars: Vec<String> },
     #[display("All or-patterns must bind the same variables. This pattern doesn't bind {}.", slice_to_string(vars, ", "))]
     TyperOrPatternDoesntBindVars { vars: Vec<String> },
+    #[display("<never> is not allowed in patterns.")]
+    TyperPatternNeverType,
     #[display("Not-patterns can't define variables.")]
     TyperNotPatternCantBindVars,
     #[display("String patterns can't have multiple holes right after each other.")]
     TyperPatternStringHolesInARow,
+
     #[display("Variable {var} cannot be re-assigned, because it isn't declared mutable.")]
     TyperVarIsntDeclaredMut { var: TypeVar },
     #[display("Can't use {var} because it isn't initialized yet.")]

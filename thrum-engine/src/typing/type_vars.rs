@@ -190,7 +190,7 @@ impl<'ast> TypeChecker<'ast> {
             PatternOrVarId::Pattern(pattern, _) => {
                 self.check_assign_pattern_and_value(
                     pattern, Some(value), &mut false, true, false, false,
-                    Some(TypeVarConstVal::NotYetEvaluated { value, bind_to })
+                    Some(&TypeVarConstVal::NotYetEvaluated { value, bind_to })
                 );
             }
             PatternOrVarId::CustomTypeVarId(var_id) => {
