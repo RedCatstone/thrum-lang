@@ -2,7 +2,7 @@ use derive_more::Display;
 
 
 #[derive(Debug, Display, Clone)]
-#[display("({token} - {span})")]
+#[display("({token} {span})")]
 pub struct TokenSpan {
     pub token: TokenKind,
     // where its located in the file, for errors

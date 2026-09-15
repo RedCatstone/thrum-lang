@@ -128,6 +128,7 @@ mod common;
 
     test_err!("if (1, 2) is let (x, y) | (x, _) {}", ErrType::TyperOrPatternDoesntBindVars { .. });
     test_err!("if (1, 2) is let (x, _) | (x, y) {}", ErrType::TyperOrPatternBindsVarsTooMuch { .. });
+    test_err!("if (1, 2) is let (x, x) {}", ErrType::TyperPatternNameAlreadyBound { .. });
 
     test_err!("if (1, 2) is let (x, 0) | (0, y) { }", ErrType::TyperOrPatternDoesntBindVars { .. });
     test_err!("let (x, 0) = (1, 2)", ErrType::TyperFailableAssignPattern { .. });

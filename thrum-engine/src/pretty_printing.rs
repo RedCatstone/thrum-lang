@@ -1,13 +1,17 @@
 use std::fmt::{self, Display, Write};
-use crate::{ProgramError, ProgramSourceData, parsing::ast::{AstArena, AstClosure, Expr, ExprId, Pattern, PatternId}};
+
+use simply_colored::BOLD;
+
+use crate::{ErrColor, ProgramError, ProgramSourceData, parsing::ast::{AstArena, AstClosure, Expr, ExprId, Pattern, PatternId}};
 
 
 
 
 #[must_use]
-pub fn format_program_error<T: Display>(err: &ProgramError<T>, source_data: &ProgramSourceData) -> String {
+pub fn format_program_error<T: Display + ErrColor>(err: &ProgramError<T>, source_data: &ProgramSourceData) -> String {
     // get the ErrType message
     let mut output_str = format!("{}\n{}\n", err.err_type, err.compiler_location);
+    // if A_LOT_OF_DEBUG_OUTPUT { writeln!(output_str, "{}", err.compiler_location).unwrap() }
 
     if err.span.length > usize::MAX / 2 { return format!("{output_str}(couldn't print where...)") }
 
@@ -31,9 +35,11 @@ pub fn format_program_error<T: Display>(err: &ProgramError<T>, source_data: &Pro
         } else { source_data.source_code.len() };
 
         let mut add_line = |line_number: bool, msg: &str, pfx: &str| {
-            writeln!(output_str, "{:>width$} |{pfx}{msg}",
+            writeln!(output_str, "{:>line_number_width$} |{}{BOLD}{pfx}{}{msg}{}",
                 if line_number { line_index.to_string() } else { String::new() },
-                width = line_number_width
+                T::ERR_COLOR,
+                if line_number { simply_colored::RESET } else { "" },
+                if line_number { "" } else { simply_colored::RESET }
             ).unwrap();
         };
 
@@ -64,7 +70,7 @@ pub fn format_program_error<T: Display>(err: &ProgramError<T>, source_data: &Pro
                 add_line(false, &format!("{}{}", "_".repeat(err_start - line_start), "^".repeat(line_end - err_start)), " _");
                 prefix = "| ";
             }
-            (true, true) => { },
+            (true, true) => { }
         }
     }
 

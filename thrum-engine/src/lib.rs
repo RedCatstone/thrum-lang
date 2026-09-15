@@ -1,6 +1,7 @@
 use std::{fmt::Display, time::Instant};
 
 use derive_more::Display;
+use simply_colored::{BOLD, GREEN, RED, RESET, YELLOW};
 
 use crate::{lexing::tokens::{Span, TokenKind}, parsing::ast::ExprId, pretty_printing::{format_program_error, slice_to_or_string, slice_to_string}, typing::type_vars::TypeVar, vm_compiling::VmValue, vm_evaluating::VM};
 
@@ -39,16 +40,19 @@ pub struct ProgramSourceData<'a> {
 }
 
 
-pub struct ProgramError<T: Display> {
+pub struct ProgramError<T: Display + ErrColor> {
     pub span: Span,
     pub err_type: T,
 
     // for debugging: where in this source code did the error happen
     pub compiler_location: &'static std::panic::Location<'static>
 }
+pub trait ErrColor { const ERR_COLOR: &str; }
+impl ErrColor for WarnType { const ERR_COLOR: &str = simply_colored::YELLOW; }
+impl ErrColor for ErrType { const ERR_COLOR: &str = simply_colored::RED; }
 
 #[derive(Debug, Display, Clone)]
-#[display("Error: {_variant}")]
+#[display("{RED}{BOLD}Error{RESET}{BOLD}: {_variant}{RESET}")]
 pub enum ErrType {
     #[display("Unexpected character: {c}")]
     LexerUnexpectedCharacter { c: char },
@@ -107,8 +111,8 @@ pub enum ErrType {
     #[display("member .{member} does not exist on type: {typ}")]
     TyperTypeDoesntHaveMember { typ: String, member: String },
 
-    #[display("Pattern already bound {var}")]
-    TyperOrPatternAlreadyBound { var: TypeVar },
+    #[display("Pattern already bound name {var}")]
+    TyperPatternNameAlreadyBound { var: TypeVar },
     #[display("All or-patterns must bind the same variables. This pattern doesn't bind {}.", slice_to_string(vars, ", "))]
     TyperOrPatternBindsVarsTooMuch { vars: Vec<String> },
     #[display("All or-patterns must bind the same variables. This pattern doesn't bind {}.", slice_to_string(vars, ", "))]
@@ -191,7 +195,7 @@ pub enum ErrType {
 
 
 #[derive(Debug, Display, Clone)]
-#[display("Warning: {_variant}")]
+#[display("{YELLOW}{BOLD}Warning{RESET}{BOLD}: {_variant}{RESET}")]
 pub enum WarnType {
     #[display("Incosistent spacing around infix '{op}'.")]
     ParserInconsistentSpacingAroundInfixOp { op: TokenKind },
@@ -206,12 +210,15 @@ pub enum WarnType {
 
 
 
+const A_LOT_OF_DEBUG_OUTPUT: bool = cfg!(debug_assertions);
 
 const INCLUDE_PRELUDE: bool = true;
 pub const PRELUDE: &str = if INCLUDE_PRELUDE { include_str!("prelude.thrum") } else { "" };
 
 
 pub fn run_code(source_code: &str) -> (Result<VmValue, Vec<ErrType>>, Vec<WarnType>) {
+    let compile_start = Instant::now();
+
     // line numbers are gonna be messed up by just slapping the prelude before the code
     // but i don't care for now
     let preluded_source_code = &format!("{PRELUDE}\n{source_code}");
@@ -231,31 +238,35 @@ pub fn run_code(source_code: &str) -> (Result<VmValue, Vec<ErrType>>, Vec<WarnTy
 
     let mut ast = parsing::Parser::start(&mut err_data, preluded_source_code, &lexer_tokens);
     drop(lexer_tokens);
-    bail_on_err!(stage_complete("Parser", &ast.display_expr(ExprId(0)), &err_data, &source_data));
+    bail_on_err!(stage_complete("Parser", ""/*&ast.display_expr(ExprId(0))*/, &err_data, &source_data));
 
     parsing::desugar::desugar_after_parsing(&mut ast);
     bail_on_err!(stage_complete("Desugar", &ast.display_expr(ExprId(0)), &ProgramErrorData::new(), &source_data));
 
     let (typed_ast, mut compiled_functions) = typing::TypeChecker::start(&mut err_data, &ast);
-    bail_on_err!(stage_complete("Typechecker", &format!("compiled_functions: {compiled_functions:?}"), &err_data, &source_data));
+    bail_on_err!(stage_complete("Typechecker", ""/*&format!("typed_ast: {typed_ast:?}")*/, &err_data, &source_data));
 
     vm_compiling::VmCompiler::start(&ast, &typed_ast, &mut compiled_functions);
     bail_on_err!(stage_complete("VmCompiler", &format!("{compiled_functions:?}"), &ProgramErrorData::new(), &source_data));
 
 
-    let start_execution_time = Instant::now();
+    let execution_start = Instant::now();
     let result = unsafe { VM::start(&mut compiled_functions, None, 0) };
     let warnings = err_data.warnings.iter().map(|x| x.err_type.clone()).collect();
 
+    let timer_str = format!("({GREEN}{:?}{RESET}, {GREEN}{:?}{RESET})",
+        execution_start.duration_since(compile_start),
+        execution_start.elapsed()
+    );
     match result {
         Ok(r) => {
-            println!("\n--- Execution Successfull ({:?}) ---", start_execution_time.elapsed());
-            println!("{r}");
+            println!("--- Execution Successfull {timer_str} ---");
+            println!("{YELLOW}{BOLD}{r}{RESET}");
             (Ok(r), warnings)
         }
         Err(err) => {
-            println!("\n--- Runtime Error ({:?}) ---", start_execution_time.elapsed());
-            println!("{err}");
+            println!("--- Runtime Error {timer_str} ---");
+            println!("{RED}{BOLD}{err}{RESET}");
             (Err(vec![err]), warnings)
         }
     }
@@ -263,9 +274,11 @@ pub fn run_code(source_code: &str) -> (Result<VmValue, Vec<ErrType>>, Vec<WarnTy
 
 
 fn stage_complete(stage: &str, msg: &str, err_data: &ProgramErrorData, source_data: &ProgramSourceData) -> Result<(), Vec<ErrType>> {
-    println!("--- {stage} complete! ---");
-    if !msg.is_empty() {
-        println!("{msg}\n");
+    if A_LOT_OF_DEBUG_OUTPUT {
+        println!("--- {stage} complete! ---");
+        if !msg.is_empty() {
+            println!("{msg}\n");
+        }
     }
 
     if !err_data.warnings.is_empty() {

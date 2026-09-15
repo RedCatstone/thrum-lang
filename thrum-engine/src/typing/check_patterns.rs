@@ -80,7 +80,7 @@ impl<'ast> TypeChecker<'ast> {
                 self.typed_ast.resolved_pattern_var.insert(pattern, var_id);
                 let old_var = ctx.vars_defined.insert(name, var_id);
                 if old_var.is_some() {
-                    self.error(ErrType::TyperOrPatternAlreadyBound { var: self.typed_ast.get_var(var_id).clone() }, span);
+                    self.error(ErrType::TyperPatternNameAlreadyBound { var: self.typed_ast.get_var(var_id).clone() }, span);
                 }
 
                 typ

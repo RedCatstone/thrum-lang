@@ -1,4 +1,4 @@
-use crate::{ErrType, pretty_printing::slice_to_string, typing::{Type, TypeArena, TypeTuple}, vm_compiling::{CompilingStatus, FunctionRegistry, NumMode, OpCode, VmValue}};
+use crate::{A_LOT_OF_DEBUG_OUTPUT, ErrType, pretty_printing::slice_to_string, typing::{Type, TypeArena, TypeTuple}, vm_compiling::{CompilingStatus, FunctionRegistry, NumMode, OpCode, VmValue}};
 
 
 
@@ -92,7 +92,7 @@ impl<'a> VM<'a> {
             value_stack: Vec::with_capacity(1024)
         };
         vm.load_frame_from_index(entry_slot);
-        unsafe { vm.run(cfg!(debug_assertions)) }
+        unsafe { vm.run() }
     }
 
 
@@ -116,13 +116,14 @@ impl<'a> VM<'a> {
     /// # Safety
     /// The typechecker should make sure that `ValuePointers` are used correctly!
     /// If it fails, this will cause UB. :(
-    pub unsafe fn run(&mut self, print_debug_execution: bool) -> Result<VmValue, ErrType> {
+    pub unsafe fn run(&mut self) -> Result<VmValue, ErrType> {
         loop {
             let Some(frame) = self.frames.last_mut() else {
                 // else the program finished!
                 let [final_val] = &self.value_stack[..] else {
                     unreachable!("not exactly 1 final value?! {:?}", self.value_stack)
                 };
+                if A_LOT_OF_DEBUG_OUTPUT { println!() }
                 return Ok(final_val.clone())
             };
             let CompilingStatus::Compiled(chunk) = &mut self.compiled_functions.compiled_functions[frame.chunk_index] else {
@@ -131,7 +132,7 @@ impl<'a> VM<'a> {
             let instruction = &chunk.ops[frame.ip];
             frame.ip += 1;
 
-            if print_debug_execution {
+            if A_LOT_OF_DEBUG_OUTPUT {
                 print!("{:<28}", format!("{instruction:?}"));
                 // value stack will be printed after the match vv
             }
@@ -411,7 +412,7 @@ impl<'a> VM<'a> {
                 OpCode::NoOp => { }
             }
 
-            if print_debug_execution {
+            if A_LOT_OF_DEBUG_OUTPUT {
                 println!("-> {}", slice_to_string(&self.value_stack, ", "));
             }
         }

@@ -8,6 +8,7 @@ version.workspace = true
 
 [dependencies]
 derive_more = { version = "2.1.1", features = ["display", "error"] }
+simply_colored = "0.1.7"
 strum_macros = "0.28.0"  # using EnumString for pretty_printing
 
 [lib]

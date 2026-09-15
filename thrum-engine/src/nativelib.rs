@@ -46,6 +46,16 @@ pub fn get_native_lib(_type_arena: &mut TypeArena) -> ThrumModule {
     });
     std_module.type_impls.insert(TypeId::STR, str_methods);
 
+    let mut float_methods = HashMap::new();
+    float_methods.insert("NAN".to_string(), ThrumValue { typ: Type::NumFloat, val: VmValue::Float(f64::NAN), is_prelude: true });
+    float_methods.insert("INFINITY".to_string(), ThrumValue { typ: Type::NumFloat, val: VmValue::Float(f64::INFINITY), is_prelude: true });
+    float_methods.insert("NEG_INFINITY".to_string(), ThrumValue { typ: Type::NumFloat, val: VmValue::Float(f64::NEG_INFINITY), is_prelude: true });
+    float_methods.insert("MAX".to_string(), ThrumValue { typ: Type::NumFloat, val: VmValue::Float(f64::MAX), is_prelude: true });
+    float_methods.insert("MIN".to_string(), ThrumValue { typ: Type::NumFloat, val: VmValue::Float(f64::MIN), is_prelude: true });
+    float_methods.insert("MIN_POSITIVE".to_string(), ThrumValue { typ: Type::NumFloat, val: VmValue::Float(f64::MIN_POSITIVE), is_prelude: true });
+    float_methods.insert("MAX_NEGATIVE".to_string(), ThrumValue { typ: Type::NumFloat, val: VmValue::Float(-f64::MIN_POSITIVE), is_prelude: true });
+    std_module.type_impls.insert(TypeId::FLOAT, float_methods);
+
     std_module
 }
 
