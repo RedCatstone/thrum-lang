@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use derive_more::Display;
 
-use crate::{ErrType, lexing::tokens::{AssignOp, TokenKind}, parsing::ast::{AstArena, AstValue, Expr, ExprId, Pattern, PatternId}, pretty_printing::slice_to_string, typing::{ResolvedMemberAccess, ResolvedTypeInstantiation, TypeArena, TypeId, TypeVarId, TypedAst, type_vars::TypeVarConstVal}, vm_evaluating};
+use crate::{ErrType, lexing::tokens::{AssignOp, TokenKind}, nativelib::NativeFn, parsing::ast::{AstArena, AstValue, Expr, ExprId, Pattern, PatternId}, pretty_printing::slice_to_string, typing::{ResolvedMemberAccess, ResolvedTypeInstantiation, TypeArena, TypeId, TypeVarId, TypedAst, type_vars::TypeVarConstVal}, vm_evaluating};
 
 
 #[derive(Debug, Display, Clone, PartialEq, PartialOrd)]
@@ -24,7 +24,7 @@ pub enum VmValue {
     #[display("*<{_0:?}>")]
     ValuePointer(*mut Self),
     #[display("nativeFn<{_0:?}>")]
-    NativeFn(fn(&[Self]) -> Result<Self, ErrType>),
+    NativeFn(NativeFn),
     #[display("fn<{slot}>")]
     Fn { slot: usize },
 

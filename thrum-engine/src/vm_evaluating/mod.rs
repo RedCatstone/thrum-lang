@@ -351,7 +351,7 @@ impl<'a> VM<'a> {
                     match callee {
                         VmValue::NativeFn(native_fn) => {
                             self.stack_push_val(
-                                native_fn(&args)?
+                                native_fn.0(&args)?
                             );
                         }
 
