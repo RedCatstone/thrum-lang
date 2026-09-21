@@ -15,16 +15,6 @@ pub struct ThrumModule {
     pub type_impls: HashMap<TypeId, HashMap<String, ThrumValue>>
 }
 
-#[derive(Debug, Clone)]
-pub struct NativeFn(pub fn(&[VmValue]) -> Result<VmValue, ErrType>);
-
-impl PartialOrd for NativeFn {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { panic!("tried to compare fn pointers... {self:?} {other:?}") }
-}
-impl PartialEq for NativeFn {
-    fn eq(&self, other: &Self) -> bool { panic!("tried to compare fn pointers... {self:?} {other:?}") }
-}
-
 
 pub fn get_native_lib(_type_arena: &mut TypeArena) -> ThrumModule {
     let mut std_module = ThrumModule::default();
@@ -32,12 +22,12 @@ pub fn get_native_lib(_type_arena: &mut TypeArena) -> ThrumModule {
     let mut io_module = ThrumModule::default();
     io_module.values.insert("print".to_string(), ThrumValue {
         typ: Type::Fn { param_types: vec![TypeId::STR], return_type: TypeId::VOID },
-        val: VmValue::NativeFn(NativeFn(native_print)),
+        val: VmValue::NativeFn(native_print),
         is_prelude: true,
     });
     io_module.values.insert("panic".to_string(), ThrumValue {
         typ: Type::Fn { param_types: vec![TypeId::STR], return_type: TypeId::NEVER },
-        val: VmValue::NativeFn(NativeFn(native_panic)),
+        val: VmValue::NativeFn(native_panic),
         is_prelude: true,
     });
     std_module.sub_modules.insert("io".to_string(), io_module);
@@ -50,7 +40,7 @@ pub fn get_native_lib(_type_arena: &mut TypeArena) -> ThrumModule {
     let mut str_methods = HashMap::new();
     str_methods.insert("len".to_string(), ThrumValue {
         typ: Type::Fn { param_types: vec![TypeId::STR], return_type: TypeId::STR },
-        val: VmValue::NativeFn(NativeFn(native_str_len)),
+        val: VmValue::NativeFn(native_str_len),
         is_prelude: true
     });
     std_module.type_impls.insert(TypeId::STR, str_methods);

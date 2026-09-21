@@ -2,10 +2,17 @@ use std::collections::HashMap;
 
 use derive_more::Display;
 
-use crate::{ErrType, lexing::tokens::{AssignOp, TokenKind}, nativelib::NativeFn, parsing::ast::{AstArena, AstValue, Expr, ExprId, Pattern, PatternId}, pretty_printing::slice_to_string, typing::{ResolvedMemberAccess, ResolvedTypeInstantiation, TypeArena, TypeId, TypeVarId, TypedAst, type_vars::TypeVarConstVal}, vm_evaluating};
+use crate::{
+    ErrType,
+    lexing::tokens::{AssignOp, TokenKind},
+    parsing::ast::{AstArena, AstValue, Expr, ExprId, Pattern, PatternId},
+    pretty_printing::slice_to_string,
+    typing::{ResolvedMemberAccess, ResolvedTypeInstantiation, TypeArena, TypeId, TypeVarId, TypedAst, type_vars::TypeVarConstVal},
+    vm_evaluating
+};
 
 
-#[derive(Debug, Display, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Display, Clone)]
 pub enum VmValue {
     #[display("{_0}")]
     Int(i64),
@@ -24,7 +31,7 @@ pub enum VmValue {
     #[display("*<{_0:?}>")]
     ValuePointer(*mut Self),
     #[display("nativeFn<{_0:?}>")]
-    NativeFn(NativeFn),
+    NativeFn(fn(&[Self]) -> Result<Self, ErrType>),
     #[display("fn<{slot}>")]
     Fn { slot: usize },
 
@@ -40,6 +47,29 @@ pub enum VmValue {
     // i could also use <void> here, but i want to be more clear
     #[display("<empty>")]
     Empty,
+}
+
+impl PartialEq for VmValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.partial_cmp(other) == Some(std::cmp::Ordering::Equal)
+    }
+}
+impl PartialOrd for VmValue {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Self::Int(l), Self::Int(r)) => l.partial_cmp(r),
+            (Self::Float(l), Self::Float(r)) => l.partial_cmp(r),
+            (Self::Str(l), Self::Str(r)) => l.partial_cmp(r),
+            (Self::Bool(l), Self::Bool(r)) => l.partial_cmp(r),
+            (Self::Tup(l), Self::Tup(r)) => l.partial_cmp(r),
+            (Self::ValuePointer(l), Self::ValuePointer(r)) => l.partial_cmp(r),
+            (Self::Fn { slot: l }, Self::Fn { slot: r }) => l.partial_cmp(r),
+            (Self::Void, Self::Void) | (Self::Empty, Self::Empty) => Some(std::cmp::Ordering::Equal),
+            (Self::Type(l), Self::Type(r)) => l.partial_cmp(r),
+
+            _ => panic!("comparing {self:?} with {other:?} is not implemented...")
+        }
+    }
 }
 
 impl From<AstValue> for VmValue {
