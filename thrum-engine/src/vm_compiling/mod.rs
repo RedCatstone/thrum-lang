@@ -105,7 +105,7 @@ pub enum OpCode {
     PointerSet,
 
     // Math & Logic
-    CmpEqual, CmpLess, CmpGreater,
+    CmpEqual, CmpEqualPointer, CmpLess, CmpGreater,
     NumAdd { num_mode: NumMode }, NumSubtract { num_mode: NumMode },
     NumMultiply { num_mode: NumMode }, NumDivide { num_mode: NumMode },
     NumModulo { num_mode: NumMode }, NumNegate { num_mode: NumMode },
@@ -181,7 +181,7 @@ impl OpCode {
             | Self::Return | Self::Panic
             | Self::TypeTupToTupType { labels: _ } => OpCodeRuntimeTempDiff { requires: 1, diff: 0 },
 
-            Self::CmpEqual | Self::CmpLess | Self::CmpGreater
+            Self::CmpEqual | Self::CmpEqualPointer | Self::CmpLess | Self::CmpGreater
             | Self::TupPointerIndex
             | Self::NumAdd { num_mode: _ } | Self::NumSubtract { num_mode: _ }
             | Self::NumMultiply { num_mode: _ } | Self::NumDivide { num_mode: _ } | Self::NumModulo { num_mode: _ }
@@ -875,6 +875,14 @@ impl VmCompiler<'_> {
         let start_temps = self.cur_temp_amount;
         let pattern = self.ast.get_pattern(compile_pattern);
 
+        // a pattern like `x is 5` needs a pointer compare instead of a normal compare
+        let pattern_info = self.typed_ast.resolved_pattern_derefs.get(&compile_pattern)
+            .copied().unwrap_or_default();
+
+        for _ in 0..pattern_info.deref_count {
+            self.push_op(OpCode::PointerGetClone);
+        }
+
         match pattern {
             Pattern::Wildcard => self.push_op(OpCode::ValuePop),
 
@@ -939,7 +947,7 @@ impl VmCompiler<'_> {
             // Failable patterns
             Pattern::CompareExpr(expr) => {
                 self.compile_expression(*expr);
-                self.push_op(OpCode::CmpEqual);
+                self.push_op(if pattern_info.is_pointer_compare { OpCode::CmpEqualPointer } else { OpCode::CmpEqual });
                 failure_jumps.push(FailureJump {
                     jump_loc: self.push_jump_if_false_op_for_patching(),
                     temps: self.cur_temp_amount

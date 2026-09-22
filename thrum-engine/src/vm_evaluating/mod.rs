@@ -207,6 +207,13 @@ impl<'a> VM<'a> {
                     let left = self.value_stack.pop().unwrap();
                     self.stack_push_val(VmValue::Bool(left == right));
                 }
+                OpCode::CmpEqualPointer => {
+                    let right = self.value_stack.pop().unwrap();
+                    let VmValue::ValuePointer(left_p) = self.value_stack.pop().unwrap() else {
+                        unreachable!("CmpEqualPointer expected left to be a ValuePointer...")
+                    };
+                    self.stack_push_val(VmValue::Bool(unsafe { *left_p == right }));
+                }
                 OpCode::CmpLess => {
                     let right = self.value_stack.pop().unwrap();
                     let left = self.value_stack.pop().unwrap();

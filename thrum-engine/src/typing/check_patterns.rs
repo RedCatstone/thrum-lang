@@ -1,8 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use crate::{
-    ErrType, parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId},
-    typing::{Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}},
-    vm_compiling::VmValue
+    ErrType, parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId}, typing::{PatternDerefInfo, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}}, vm_compiling::VmValue
 };
 
 pub struct CheckPatternCtx<'ast, 'short> {
@@ -285,7 +283,18 @@ impl<'ast> TypeChecker<'ast> {
             }
 
             Pattern::CompareExpr(expr) => {
-                let expr_type = self.check_expression(*expr, &mut false, CheckExprCtx::default());
+                let (target_pointers, base_expected) = if let Some(expected) = ctx.expected_type
+                    && let Some((count, _, base)) = self.count_initial_pointers(expected) {
+                        (count, Some(base))
+                    } else {
+                        (0, None)
+                    };
+
+                let is_pointer_compare = target_pointers > 0;
+                let deref_count = target_pointers.saturating_sub(1);
+                self.typed_ast.resolved_pattern_derefs.insert(pattern, PatternDerefInfo { deref_count, is_pointer_compare });
+
+                let expr_type = self.check_expression(*expr, &mut false, CheckExprCtx::default().maybe_expect(base_expected));
 
                 // if there the compare expr is a simple literal, or a const value
                 // then add that to covered_cases
@@ -304,7 +313,7 @@ impl<'ast> TypeChecker<'ast> {
                     _ => {}
                 }
 
-                expr_type
+                ctx.expected_type.unwrap_or(expr_type)
             }
 
             Pattern::PlacePointer(expr) => {

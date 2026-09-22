@@ -56,8 +56,8 @@ impl TypeChecker<'_> {
     fn auto_deref_to_expected_type(&mut self, expr: ExprId, expected_id: TypeId) -> TypeId {
         let expr_type = self.typed_ast.get_expr_type(expr);
 
-        if let Some((expr_p_count, is_auto_clone_after)) = self.count_initial_pointers(expr_type)
-        && let Some((expected_p_count, _)) = self.count_initial_pointers(expected_id) {
+        if let Some((expr_p_count, is_auto_clone_after, _)) = self.count_initial_pointers(expr_type)
+        && let Some((expected_p_count, _, _)) = self.count_initial_pointers(expected_id) {
 
             // if we have more pointers than the expected_type, AND everything that needs to be derefed is auto_clone
             if expr_p_count > expected_p_count && (expected_p_count != 0 || is_auto_clone_after) {
@@ -70,7 +70,7 @@ impl TypeChecker<'_> {
         self.typed_ast.get_expr_type(expr)
     }
 
-    fn count_initial_pointers(&self, typ: TypeId) -> Option<(usize, bool)> {
+    pub(super) fn count_initial_pointers(&self, typ: TypeId) -> Option<(usize, bool, TypeId)> {
         let mut curr_typ = typ;
         let mut count = 0;
 
@@ -80,7 +80,7 @@ impl TypeChecker<'_> {
         }
 
         self.is_auto_clone(curr_typ)
-            .map(|final_auto_clone| (count, final_auto_clone))
+            .map(|final_auto_clone| (count, final_auto_clone, curr_typ))
     }
 
 
@@ -95,8 +95,10 @@ impl TypeChecker<'_> {
                 while self.deref_if_pointer(check_expr) { }
             }
             AutoDerefMode::LeaveOnePointer => {
-                while let Some((2.., _)) = self.count_initial_pointers(self.typed_ast.get_expr_type(check_expr)) {
-                    assert!(self.deref_if_pointer(check_expr));
+                if let Some((p_count, _, _)) = self.count_initial_pointers(self.typed_ast.get_expr_type(check_expr)) {
+                    for _ in 1..p_count {
+                        assert!(self.deref_if_pointer(check_expr));
+                    }
                 }
             }
         }
