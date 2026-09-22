@@ -1,5 +1,9 @@
 // run me by doing `cargo run Code.thrum`
 
+fn ref5(p: &&&&&int) -> bool => p is 5
+fn ref4(p: &&&&int) -> bool => ref5(p)
+fn ref3(p: &&&int) -> bool => ref4(p)
+fn ref2(p: &&int) -> bool => ref3(p)
+fn ref1(p: &int) -> bool => ref2(p)
 let x = 5
-
-if x is 5 => print("hooray!")
+ref1(x)

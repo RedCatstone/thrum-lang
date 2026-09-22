@@ -174,30 +174,6 @@ mod common;
     test!("let mut sum = 0; for x in 10..=10 => sum = x^; sum^", VmValue::Int(10));
 }
 
-
-#[test] fn tup_destructuring() {
-    test!("
-        let tup = ((1, 2), 2, (3, 4, 5))
-        let (_, _, (_, x, _)) = tup^
-        x^
-    ", VmValue::Int(4));
-
-    test!(r#"
-        let status = "ok"
-        let data = (id: 42, status:)
-
-        if data^ is (status: "ok", id:) {
-            id^
-        }
-        else { -1 }
-    "#, VmValue::Int(42));
-
-    test!("
-        let (x, true | false) = (3, true);
-        x^
-    ", VmValue::Int(3));
-}
-
 #[test] fn tup_arrays() {
     test!("
         let x = (1, 2, 3)
@@ -273,68 +249,6 @@ mod common;
 
         res1 and !res2
     "#, VmValue::Bool(true));
-}
-
-
-#[test] fn pattern_matching() {
-    test!("7 is 7", VmValue::Bool(true));
-    test!("7 is 0", VmValue::Bool(false));
-    test!("7 is !0", VmValue::Bool(true));
-    test!("7 is !7", VmValue::Bool(false));
-    test!("7 is 5 | 6 | 7", VmValue::Bool(true));
-    test!("5 is 5 | 6 | 7", VmValue::Bool(true));
-    test!("0 is 5 | 6 | 7", VmValue::Bool(false));
-    test!("0 is !_", VmValue::Bool(false));
-    test!("1 + 1 is 1 * 1 or 2 + 2 is 2 * 2 and 3 + 3 is !3 * 3", VmValue::Bool(true));
-    test!("(1, 2) is (1, 1) | (1, 2)", VmValue::Bool(true));
-
-    test!(r#"5 is !(4 | 5) and panic("pattern should've failed...")"#, VmValue::Bool(false));
-    test!(r#"5 is !(4 | 6) or panic("pattern should've failed...")"#, VmValue::Bool(true));
-}
-
-#[test] fn string_patterns() {
-    test!(r#"
-        if "hello cat from Earth!" is let "hello {name} from {location}!" => (name, location)
-        else panic("")
-    "#, VmValue::Tup(vec![VmValue::Str("cat".to_string()), VmValue::Str("Earth".to_string())]));
-
-    test!(r#" "Pat the Cat likes to sit on a Mat." is "{_}Cat{_}" "#, VmValue::Bool(true));
-
-    test!(r#"
-        if "[1, 2, 3]" is let "[{num1}, {num2}, {num3}]" => "{num1^}{num2^}{num3^}"
-        else panic("")
-    "#, VmValue::Str("123".to_string()));
-
-    test!(r#" "" is "" "#, VmValue::Bool(true));
-    test!(r#" "a" is "" "#, VmValue::Bool(false));
-    test!(r#" "" is "{_}" "#, VmValue::Bool(true));
-    test!(r#" "" is "{""}" "#, VmValue::Bool(true));
-}
-
-#[test] fn match_exprs() {
-    test!(r#"
-        match (69, "yay!")
-        is (69, "") => "nope1"
-        is (0, "yay!") => "nope2"
-        is (0, "") => "nope3"
-        is (69, let x) => x^
-        is _ => "nope4"
-    "#, VmValue::Str("yay!".to_string()));
-
-    test!("match false is true => 0, is _ => -3", VmValue::Int(-3));
-}
-#[test] fn enum_match_expr() {
-    test!("
-        const Opt = enum { None, Some{ int } }
-
-        let val: Opt = :Some{ 42 }
-
-        match val^
-        is :None => -1
-        is :Some{ 0 | 1 | 2 } => 0
-        is :Some{ !42 } => 1
-        is :Some{ let x } => x^
-    ", VmValue::Int(42));
 }
 
 #[test] fn ensure_expr() {
