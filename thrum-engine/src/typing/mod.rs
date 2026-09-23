@@ -138,7 +138,7 @@ pub struct TypedAst {
     pub resolved_member_access: HashMap<ExprId, ResolvedMemberAccess>,
     pub resolved_labels: HashMap<ExprId, ExprId>,  // maps a labeled-expr to where it needs to jump to
     pub auto_derefs: HashMap<ExprId, usize>,  // amount of autoderefs
-    pub resolved_pattern_derefs: HashMap<PatternId, PatternDerefInfo>,
+    pub resolved_pattern_derefs: HashMap<PatternId, usize>,
     pub move_expr: HashSet<ExprId>,
 }
 impl TypedAst {
@@ -211,12 +211,6 @@ pub enum ResolvedMemberAccess {
     Member { constant: VmValue },  // Point.distance(p)
     MemberWithSelfSugar { constant: VmValue, self_sugar_expr: ExprId },  // p.distance()
     EnumWithNoData { i: usize }  // Option.None
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct PatternDerefInfo {
-    pub deref_count: usize,
-    pub is_pointer_compare: bool
 }
 
 #[derive(Debug)]

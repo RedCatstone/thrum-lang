@@ -1,9 +1,4 @@
 // run me by doing `cargo run Code.thrum`
 
-fn ref5(p: &&&&&int) -> bool => p is 5
-fn ref4(p: &&&&int) -> bool => ref5(p)
-fn ref3(p: &&&int) -> bool => ref4(p)
-fn ref2(p: &&int) -> bool => ref3(p)
-fn ref1(p: &int) -> bool => ref2(p)
-let x = 5
-ref1(x)
+let x = (69, 420)
+x is (69, 420)

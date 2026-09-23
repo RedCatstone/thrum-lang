@@ -281,6 +281,19 @@ impl<'a> VM<'a> {
 
                     self.stack_extend_from_slice(&tup);
                 }
+                OpCode::TupPointerUnpack { length } => {
+                    let VmValue::ValuePointer(tup_pointer) = self.value_stack.pop().unwrap() else {
+                        unreachable!("not a ValuePointer")
+                    };
+                    let VmValue::Tup(tup) = (unsafe { &mut *tup_pointer }) else {
+                        unreachable!("not a pointer to a Tup")
+                    };
+                    assert_eq!(*length, tup.len());
+
+                    for elem in &mut tup[0..*length] {
+                        self.stack_push_val(VmValue::ValuePointer(elem));
+                    }
+                }
 
 
                 // Strings

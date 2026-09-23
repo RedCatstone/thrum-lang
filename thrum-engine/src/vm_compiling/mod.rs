@@ -118,6 +118,7 @@ pub enum OpCode {
     TupGet { index: usize },
     TupPointerIndex,
     TupUnpack { length: usize },
+    TupPointerUnpack { length: usize },
 
     // Strings
     StrAdd,
@@ -190,7 +191,9 @@ impl OpCode {
             Self::StrTemplate { length }
             | Self::TupCreate { length } => OpCodeRuntimeTempDiff { requires: *length, diff: 1 - isize::try_from(*length).unwrap() },
 
-            Self::TupUnpack { length } => OpCodeRuntimeTempDiff { requires: 1, diff: isize::try_from(*length).unwrap() - 1 },
+            Self::TupUnpack { length }
+            | Self::TupPointerUnpack { length } => OpCodeRuntimeTempDiff { requires: 1, diff: isize::try_from(*length).unwrap() - 1 },
+
             Self::Jump { .. } | Self::NoOp => OpCodeRuntimeTempDiff { requires: 0, diff: 0 },
             Self::CallFn { arg_count } => OpCodeRuntimeTempDiff { requires: *arg_count, diff: -isize::try_from(*arg_count).unwrap() },
         }
@@ -876,12 +879,13 @@ impl VmCompiler<'_> {
         let pattern = self.ast.get_pattern(compile_pattern);
 
         // a pattern like `x is 5` needs a pointer compare instead of a normal compare
-        let pattern_info = self.typed_ast.resolved_pattern_derefs.get(&compile_pattern)
+        let pointer_count = self.typed_ast.resolved_pattern_derefs.get(&compile_pattern)
             .copied().unwrap_or_default();
 
-        for _ in 0..pattern_info.deref_count {
+        for _ in 1..pointer_count {
             self.push_op(OpCode::PointerGetClone);
         }
+        let is_pointer_compare = pointer_count > 0;
 
         match pattern {
             Pattern::Wildcard => self.push_op(OpCode::ValuePop),
@@ -892,10 +896,7 @@ impl VmCompiler<'_> {
             }
 
             Pattern::Tuple(patterns) => {
-                // manually do stuff that self.push_op() does
-                // because OpCode::runtime_temp_effect can't know how many temps TupUnpack is gonna add.
-                self.push_op(OpCode::TupUnpack { length: patterns.len() });
-
+                self.push_op(if is_pointer_compare { OpCode::TupPointerUnpack { length: patterns.len() } } else { OpCode::TupUnpack { length: patterns.len() } });
                 for pattern in patterns.iter().rev() {
                     self.compile_binding_pattern(pattern.pattern, failure_jumps);
                 }
@@ -947,7 +948,7 @@ impl VmCompiler<'_> {
             // Failable patterns
             Pattern::CompareExpr(expr) => {
                 self.compile_expression(*expr);
-                self.push_op(if pattern_info.is_pointer_compare { OpCode::CmpEqualPointer } else { OpCode::CmpEqual });
+                self.push_op(if is_pointer_compare { OpCode::CmpEqualPointer } else { OpCode::CmpEqual });
                 failure_jumps.push(FailureJump {
                     jump_loc: self.push_jump_if_false_op_for_patching(),
                     temps: self.cur_temp_amount

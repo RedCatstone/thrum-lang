@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use crate::{
-    ErrType, parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId}, typing::{PatternDerefInfo, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}}, vm_compiling::VmValue
+    ErrType,
+    parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId},
+    typing::{Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}},
+    vm_compiling::VmValue
 };
 
 pub struct CheckPatternCtx<'ast, 'short> {
@@ -88,12 +91,31 @@ impl<'ast> TypeChecker<'ast> {
                 let mut tuple_types = Vec::new();
                 let mut tuple_covered_cases = Vec::new();
 
-                let pruned_expected = ctx.expected_type.map(|t| self.prune_type_once(t));
+                let (pointer_count, base_expected) = if let Some(expected) = ctx.expected_type
+                    && let Some((count, _, base)) = self.count_initial_pointers(expected) {
+                        (count, Some(base))
+                    } else {
+                        (0, None)
+                    };
+
+                self.typed_ast.resolved_pattern_derefs.insert(pattern, pointer_count);
+
+                let pruned_expected = base_expected.map(|t| self.prune_type_once(t));
 
                 for AstTuplePattern { label, pattern: p } in elems {
                     let elem_expected_type = match &pruned_expected {
                         Some(tup_type @ (Type::Tup(_) | Type::TupArr(_, _))) => {
-                            Self::extract_tup_label_type(tup_type, label).map(|(_, typ)| typ)
+                            Self::extract_tup_label_type(tup_type, label)
+                                // if the pattern was a ref to a tuple, make refs to all elements
+                                .map(|(_, typ)| if pointer_count > 0 {
+                                        self.type_arena.add_type(Type::Borrow {
+                                            inner: typ,
+                                            mutable: false,
+                                            borrows_var: None,
+                                        })
+                                    } else {
+                                        typ
+                                    })
                         }
                         _ => None
                     };
@@ -105,7 +127,27 @@ impl<'ast> TypeChecker<'ast> {
 
                 covered_cases = PatternSpace::tuple_cartesian_product(&tuple_covered_cases);
 
-                self.type_arena.add_type(Type::Tup(tuple_types))
+                if let Some(base) = base_expected {
+                    let elems = tuple_types.iter().map(|tt| {
+                            let typ = if let Some((_, _, elem_base)) = self.count_initial_pointers(tt.typ) {
+                                elem_base
+                            } else {
+                                self.error(ErrType::TyperTypeMustBeKnownHere { typ: self.fmt_type(tt.typ) }, span)
+                            };
+
+                            TypeTuple { label: tt.label.clone(), typ }
+                        }).collect();
+
+                    let unborrowed_tuple = self.type_arena.add_type(Type::Tup(elems));
+                    self.unify_types(base, unborrowed_tuple, span, UnifyMode::Subtype);
+                }
+
+                println!("DEDEDEDE {pointer_count} - {:?}", ctx.expected_type.map(|t| self.fmt_type(t)));
+                if pointer_count > 0 {
+                    ctx.expected_type.expect("if pointer_count exists, then ctx.expected_type should exist.")
+                } else {
+                    self.type_arena.add_type(Type::Tup(tuple_types))
+                }
             }
 
             Pattern::String { before: _, hole_parts } => {
@@ -283,16 +325,14 @@ impl<'ast> TypeChecker<'ast> {
             }
 
             Pattern::CompareExpr(expr) => {
-                let (target_pointers, base_expected) = if let Some(expected) = ctx.expected_type
+                let (pointer_count, base_expected) = if let Some(expected) = ctx.expected_type
                     && let Some((count, _, base)) = self.count_initial_pointers(expected) {
                         (count, Some(base))
                     } else {
                         (0, None)
                     };
 
-                let is_pointer_compare = target_pointers > 0;
-                let deref_count = target_pointers.saturating_sub(1);
-                self.typed_ast.resolved_pattern_derefs.insert(pattern, PatternDerefInfo { deref_count, is_pointer_compare });
+                self.typed_ast.resolved_pattern_derefs.insert(pattern, pointer_count);
 
                 let expr_type = self.check_expression(*expr, &mut false, CheckExprCtx::default().maybe_expect(base_expected));
 
@@ -392,14 +432,23 @@ impl<'ast> TypeChecker<'ast> {
                 })
             }
             Pattern::Tuple(elems) => {
+                let mut any_explicit = false;
                 let type_elems = elems.iter()
                     .map(|elem| {
-                        let elem_type = self.get_pattern_type(elem.pattern).unwrap_or_else(|| self.new_infer_type());
+                        let elem_type = self.get_pattern_type(elem.pattern).map_or_else(|| self.new_infer_type(), |x| {
+                                any_explicit = true;
+                                x
+                            });
                         TypeTuple { label: elem.label.clone(), typ: elem_type }
                     })
                     .collect();
 
-                Some(self.type_arena.add_type(Type::Tup(type_elems)))
+                // this is not a perfect change, but it works for now
+                if any_explicit {
+                    Some(self.type_arena.add_type(Type::Tup(type_elems)))
+                } else {
+                    None
+                }
             }
             _ => None,
         }

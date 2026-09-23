@@ -70,6 +70,11 @@ mod common;
 #[test] fn ref_str_matching() {
     test!(r#"let s = "hello"; s is "hello" "#, VmValue::Bool(true));
     test!(r#"let s = "hello"; s is "world" "#, VmValue::Bool(false));
+
+    test!(r#"let x = "pleh"; let y = "argh"; x is y^ "#, VmValue::Bool(false));
+}
+#[test] fn ref_tuple_matching() {
+    test!("let x = (69, 420); x is (69, let y and y > 400)", VmValue::Bool(true));
 }
 
 #[test] fn double_ref_compare_pattern() {
@@ -119,7 +124,7 @@ mod common;
         let tup = ((1, 2), 2, (3, 4, 5))
         let (_, a, (_, b, _)) = tup
         a * b
-    ", VmValue::Int(4));
+    ", VmValue::Int(8));
 
     test!(r#"
         let status = "ok"
