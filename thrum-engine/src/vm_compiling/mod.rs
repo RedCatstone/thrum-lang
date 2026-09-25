@@ -30,6 +30,8 @@ pub enum VmValue {
     // this SHOULD be fully safe, since the borrow checker checked all the lifetimes.
     #[display("*<{_0:?}>")]
     ValuePointer(*mut Self),
+    #[display("slice<\"{}\">", _0.as_str())]
+    Slice(VmSlice),
     #[display("nativeFn<{_0:?}>")]
     NativeFn(fn(&[Self]) -> Result<Self, ErrType>),
     #[display("fn<{slot}>")]
@@ -49,13 +51,26 @@ pub enum VmValue {
     Empty,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct VmSlice {
+    pub ptr: *const u8,
+    pub len: usize,
+}
+impl VmSlice {
+    #[must_use] pub const fn as_str(&self) -> &str {
+        unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.ptr, self.len))
+        }
+    }
+}
+
 impl PartialEq for VmValue {
-    fn eq(&self, other: &Self) -> bool {
+    #[track_caller] fn eq(&self, other: &Self) -> bool {
         self.partial_cmp(other) == Some(std::cmp::Ordering::Equal)
     }
 }
 impl PartialOrd for VmValue {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    #[track_caller] fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match (self, other) {
             (Self::Int(l), Self::Int(r)) => l.partial_cmp(r),
             (Self::Float(l), Self::Float(r)) => l.partial_cmp(r),
@@ -63,6 +78,7 @@ impl PartialOrd for VmValue {
             (Self::Bool(l), Self::Bool(r)) => l.partial_cmp(r),
             (Self::Tup(l), Self::Tup(r)) => l.partial_cmp(r),
             (Self::ValuePointer(l), Self::ValuePointer(r)) => l.partial_cmp(r),
+            (Self::Slice(l), Self::Slice(r)) => l.as_str().partial_cmp(r.as_str()),
             (Self::Fn { slot: l }, Self::Fn { slot: r }) => l.partial_cmp(r),
             (Self::Void, Self::Void) | (Self::Empty, Self::Empty) => Some(std::cmp::Ordering::Equal),
             (Self::Type(l), Self::Type(r)) => l.partial_cmp(r),
@@ -89,6 +105,7 @@ pub enum OpCode {
     // Data Access
     ConstGet { const_index: usize },
     ConstGetRef { const_index: usize },
+    ConstGetSlice { const_index: usize },
     PushVoid,
 
     // Temps
@@ -98,6 +115,7 @@ pub enum OpCode {
     // Locals
     LocalSet { local_index: usize },
     LocalPointer { local_index: usize },
+    LocalSlice { local_index: usize },
 
     // Pointers
     PointerGetClone,
@@ -164,7 +182,7 @@ struct OpCodeRuntimeTempDiff { requires: usize, diff: isize }
 impl OpCode {
     fn runtime_temp_effect(&self) -> OpCodeRuntimeTempDiff {
         match self {
-            Self::ConstGet { .. } | Self::ConstGetRef { .. }
+            Self::ConstGet { .. } | Self::ConstGetRef { .. } | Self::ConstGetSlice { .. } | Self::LocalSlice { .. }
             | Self::PushVoid | Self::LocalPointer { .. } => OpCodeRuntimeTempDiff { requires: 0, diff: 1 },
 
             Self::ValuePop | Self::LocalSet { .. } | Self::JumpIfFalse { .. } => OpCodeRuntimeTempDiff { requires: 1, diff: -1 },
@@ -811,9 +829,9 @@ impl VmCompiler<'_> {
         self.push_op(OpCode::ConstGet { const_index });
     }
     fn push_get_constant_ref_op(&mut self, val: VmValue) {
-        // if the const value is a fn that is not compiled yet, compile it!
         if let VmValue::Fn { slot } = val
         && self.compiled_functions.compiled_functions[slot].not_compiled() {
+            // if the const value is a fn that is not compiled yet, compile it!
 
             let closure_expr = self.compiled_functions.closure_expr_id[slot];
             let Expr::Closure { closure, .. } = self.ast.get_expr(closure_expr) else {
@@ -822,8 +840,10 @@ impl VmCompiler<'_> {
             self.compile_and_insert_function(closure.body, &closure.params, slot);
         }
 
+        let is_string = matches!(val, VmValue::Str(_));
+
         let const_index = self.add_constant(val);
-        self.push_op(OpCode::ConstGetRef { const_index });
+        self.push_op(if is_string { OpCode::ConstGetSlice { const_index } } else { OpCode::ConstGetRef { const_index } });
     }
 
     fn define_local(&mut self, var_id: TypeVarId, const_value: Option<VmValue>) -> usize {
@@ -863,7 +883,12 @@ impl VmCompiler<'_> {
                 self.push_get_constant_ref_op(val.clone());
             }
             Some(CompilerVar::AtSlot(slot)) => {
-                self.push_op(OpCode::LocalPointer { local_index: *slot });
+                let op = if self.typed_ast.get_var(var_id).typ == TypeId::STR {
+                    OpCode::LocalSlice { local_index: *slot }
+                } else {
+                    OpCode::LocalPointer { local_index: *slot }
+                };
+                self.push_op(op);
             }
         }
     }
@@ -1001,7 +1026,7 @@ impl VmCompiler<'_> {
             Pattern::String { before, hole_parts } => {
                 if hole_parts.is_empty() {
                     self.push_get_constant_op(VmValue::Str(before.clone()));
-                    self.push_op(OpCode::CmpEqual);
+                    self.push_op(if is_pointer_compare { OpCode::CmpEqualPointer } else { OpCode::CmpEqual });
                     failure_jumps.push(FailureJump {
                         jump_loc: self.push_jump_if_false_op_for_patching(),
                         temps: self.cur_temp_amount

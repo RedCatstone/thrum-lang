@@ -68,8 +68,8 @@ mod common;
     test!("let pi = 3.14; pi is 3.14", VmValue::Bool(true));
 }
 #[test] fn ref_str_matching() {
-    test!(r#"let s = "hello"; s is "hello" "#, VmValue::Bool(true));
-    test!(r#"let s = "hello"; s is "world" "#, VmValue::Bool(false));
+    test!(r#"let s = "cat"; s is "cat" "#, VmValue::Bool(true));
+    test!(r#"let s = "cat"; s is "bad" "#, VmValue::Bool(false));
 
     test!(r#"let x = "pleh"; let y = "argh"; x is y^ "#, VmValue::Bool(false));
 }
@@ -170,10 +170,9 @@ mod common;
 }
 
 #[test] fn string_pattern_multiple_consecutive_holes() {
-    // TODO: remove ^ in string holes
     test!(r#"
-        if "<1, 2, 3>" is let "<{num1}, {num2}, {num3}>" => "{num1^}{num2^}{num3^}"
-        else panic("")
+        if "<1, 2, 3>" is let "<{num1}, {num2}, {num3}>" => "{num1}{num2}{num3}"
+        else "nop"
     "#, VmValue::Str("123".to_string()));
 }
 

@@ -1,4 +1,8 @@
 // run me by doing `cargo run Code.thrum`
 
-let x = (69, 420)
-x is (69, 420)
+let s = "cat"
+if s is "ca{let x}" {
+    "it was: {x}"
+} else {
+    "nop"
+}

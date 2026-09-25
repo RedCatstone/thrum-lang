@@ -142,7 +142,6 @@ impl<'ast> TypeChecker<'ast> {
                     self.unify_types(base, unborrowed_tuple, span, UnifyMode::Subtype);
                 }
 
-                println!("DEDEDEDE {pointer_count} - {:?}", ctx.expected_type.map(|t| self.fmt_type(t)));
                 if pointer_count > 0 {
                     ctx.expected_type.expect("if pointer_count exists, then ctx.expected_type should exist.")
                 } else {
@@ -151,17 +150,35 @@ impl<'ast> TypeChecker<'ast> {
             }
 
             Pattern::String { before: _, hole_parts } => {
+                let str_slice_type = self.type_arena.add_type(Type::Borrow {
+                    inner: TypeId::STR,
+                    mutable: false,
+                    borrows_var: None,
+                });
+
+                let (pointer_count, base_expected) = if let Some(expected) = ctx.expected_type
+                    && let Some((count, _, base)) = self.count_initial_pointers(expected) {
+                        (count, Some(base))
+                    } else {
+                        (0, None)
+                    };
+
+                self.typed_ast.resolved_pattern_derefs.insert(pattern, pointer_count);
+                if let Some(base) = base_expected {
+                    self.unify_types(base, TypeId::STR, span, UnifyMode::Subtype);
+                }
+
                 // INVALID: "...{_}{_}..."
                 // VALID: "...{_} {_}..."
                 // VALID: "...{_}..."
                 for (i, (hole_pat, after)) in hole_parts.iter().enumerate() {
-                    self.check_match_pattern(*hole_pat, ctx.with_expected(Some(TypeId::STR)));
+                    self.check_match_pattern(*hole_pat, ctx.with_expected(Some(str_slice_type)));
 
                     if i != hole_parts.len() - 1 && after.is_empty() {
                         self.error(ErrType::TyperPatternStringHolesInARow, span);
                     }
                 }
-                TypeId::STR
+                ctx.expected_type.unwrap_or(str_slice_type)
             }
 
             Pattern::Wildcard => {

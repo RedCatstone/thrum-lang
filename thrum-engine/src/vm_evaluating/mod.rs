@@ -1,4 +1,4 @@
-use crate::{A_LOT_OF_DEBUG_OUTPUT, ErrType, pretty_printing::slice_to_string, typing::{Type, TypeArena, TypeTuple}, vm_compiling::{CompilingStatus, FunctionRegistry, NumMode, OpCode, VmValue}};
+use crate::{A_LOT_OF_DEBUG_OUTPUT, ErrType, pretty_printing::slice_to_string, typing::{Type, TypeArena, TypeTuple}, vm_compiling::{CompilingStatus, FunctionRegistry, NumMode, OpCode, VmSlice, VmValue}};
 
 
 
@@ -146,6 +146,11 @@ impl<'a> VM<'a> {
                     let pointer = &raw mut chunk.constants[*const_index];
                     self.stack_push_val(VmValue::ValuePointer(pointer));
                 }
+                OpCode::ConstGetSlice { const_index } => {
+                    let VmValue::Str(s) = &chunk.constants[*const_index] else { unreachable!() };
+                    let slice = VmValue::Slice(VmSlice { ptr: s.as_ptr(), len: s.len() });
+                    self.stack_push_val(slice);
+                }
                 OpCode::PushVoid => {
                     self.stack_push_val(VmValue::Void);
                 }
@@ -170,6 +175,10 @@ impl<'a> VM<'a> {
                 OpCode::LocalPointer { local_index } => {
                     let pointer = &raw mut self.value_stack[frame.base_pointer + local_index];
                     self.stack_push_val(VmValue::ValuePointer(pointer));
+                }
+                OpCode::LocalSlice { local_index } => {
+                    let VmValue::Str(s) = &self.value_stack[frame.base_pointer + local_index] else { unreachable!() };
+                    self.stack_push_val(VmValue::Slice(VmSlice { ptr: s.as_ptr(), len: s.len() }));
                 }
 
 
@@ -308,44 +317,47 @@ impl<'a> VM<'a> {
                 }
                 OpCode::StrTrimPrefix { const_str } => {
                     let VmValue::Str(prefix_str) = chunk.constants[*const_str].clone() else { unreachable!() };
-                    let VmValue::Str(target_str) = self.value_stack.pop().unwrap() else { unreachable!() };
+                    let VmValue::Slice(target) = self.value_stack.pop().unwrap() else { unreachable!() };
+                    let target_str = target.as_str();
 
                     if target_str.starts_with(&prefix_str) {
-                        let remaining = target_str[prefix_str.len()..].to_string();
-                        self.value_stack.push(VmValue::Str(remaining));
+                        let remaining = &target_str[prefix_str.len()..];
+                        self.value_stack.push(VmValue::Slice(VmSlice { ptr: remaining.as_ptr(), len: remaining.len() }));
                         self.value_stack.push(VmValue::Bool(true));
                     } else {
-                        self.value_stack.push(VmValue::Str(target_str));
+                        self.value_stack.push(VmValue::Slice(target));
                         self.value_stack.push(VmValue::Bool(false));
                     }
                 }
                 OpCode::StrTrimUntil { const_str } => {
                     let VmValue::Str(delim_str) = chunk.constants[*const_str].clone() else { unreachable!() };
-                    let VmValue::Str(target_str) = self.value_stack.pop().unwrap() else { unreachable!() };
+                    let VmValue::Slice(target) = self.value_stack.pop().unwrap() else { unreachable!() };
+                    let target_str = target.as_str();
 
                     if let Some(i) = target_str.find(&delim_str) {
-                        let hole = target_str[..i].to_string();
-                        let remaining = target_str[i + delim_str.len()..].to_string();
+                        let hole = &target_str[..i];
+                        let remaining = &target_str[i + delim_str.len()..];
 
-                        self.value_stack.push(VmValue::Str(remaining));
-                        self.value_stack.push(VmValue::Str(hole));
+                        self.value_stack.push(VmValue::Slice(VmSlice { ptr: remaining.as_ptr(), len: remaining.len() }));
+                        self.value_stack.push(VmValue::Slice(VmSlice { ptr: hole.as_ptr(), len: hole.len() }));
                         self.value_stack.push(VmValue::Bool(true));
                     } else {
-                        self.value_stack.push(VmValue::Str(target_str.clone()));
-                        self.value_stack.push(VmValue::Str(target_str));
+                        self.value_stack.push(VmValue::Slice(target));
+                        self.value_stack.push(VmValue::Slice(target));
                         self.value_stack.push(VmValue::Bool(false));
                     }
                 }
                 OpCode::StrTrimSuffix { const_str } => {
                     let VmValue::Str(suffix_str) = chunk.constants[*const_str].clone() else { unreachable!() };
-                    let VmValue::Str(target_str) = self.value_stack.pop().unwrap() else { unreachable!() };
+                    let VmValue::Slice(target) = self.value_stack.pop().unwrap() else { unreachable!() };
+                    let target_str = target.as_str();
 
                     if target_str.ends_with(&suffix_str) {
-                        let hole = target_str[..target_str.len() - suffix_str.len()].to_string();
-                        self.value_stack.push(VmValue::Str(hole));
+                        let hole = &target_str[..target_str.len() - suffix_str.len()];
+                        self.value_stack.push(VmValue::Slice(VmSlice { ptr: hole.as_ptr(), len: hole.len() }));
                         self.value_stack.push(VmValue::Bool(true));
                     } else {
-                        self.value_stack.push(VmValue::Str(target_str.clone()));
+                        self.value_stack.push(VmValue::Slice(target));
                         self.value_stack.push(VmValue::Bool(false));
                     }
                 }
@@ -456,6 +468,8 @@ impl<'a> VM<'a> {
     fn val_to_string(val: &VmValue) -> String {
         match val {
             VmValue::Str(str) => str.clone(),
+            VmValue::Slice(slice) => slice.as_str().to_string(),
+            VmValue::ValuePointer(p) => Self::val_to_string(unsafe { &**p }),
             VmValue::Int(_)
             | VmValue::Float(_)
             | VmValue::Bool(_)

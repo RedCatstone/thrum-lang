@@ -79,6 +79,7 @@ impl TypeChecker<'_> {
             count += 1;
         }
 
+        // returns None on inference error
         self.is_auto_clone(curr_typ)
             .map(|final_auto_clone| (count, final_auto_clone, curr_typ))
     }
