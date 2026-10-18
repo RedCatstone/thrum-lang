@@ -248,13 +248,19 @@ impl<'ast> TypeChecker<'ast> {
                 match self.prune_type_once_infer_err(meta_id, span) {
                     Type::CustomType(_, inner_new_type) => {
 
+                        // because NewType's don't actually exist in the VM, this pattern can keep all pointers
+                        // `let NewInt{ inner } = x`  if x was type `&&&NewInt`, inner is type `&&&int`
+                        let elem_expected_type = ctx.expected_type.map(|expected| {
+                            self.replace_borrow_inner_recursive(expected, inner_new_type)
+                        });
+
                         match self.prune_type_once_infer_err(inner_new_type, span) {
                             Type::Error => TypeId::ERROR,
                             Type::Tup(_) | Type::TupArr(_, _) => {
                                 // if it expects a tuple, e.g. `type Point = { num, num }`
                                 // then just typecheck normally. (`data` is already a tuple expr)
                                 let (typ, covered) = self.check_match_pattern(
-                                    *data, ctx.with_expected(Some(inner_new_type))
+                                    *data, ctx.with_expected(elem_expected_type)
                                 );
                                 covered_cases = covered;
                                 typ
@@ -267,7 +273,7 @@ impl<'ast> TypeChecker<'ast> {
                                 if let [first] = elems.as_slice() && first.label == "0" {
                                     self.typed_ast.resolved_type_destruction_not_a_tuple.insert(pattern);
                                     let (typ, covered) = self.check_match_pattern(
-                                        first.pattern, ctx.with_expected(Some(inner_new_type))
+                                        first.pattern, ctx.with_expected(elem_expected_type)
                                     );
                                     covered_cases = covered;
                                     typ
@@ -279,7 +285,7 @@ impl<'ast> TypeChecker<'ast> {
                         };
 
                         // `N{ 2 }` returns the type `N`
-                        meta_id
+                        ctx.expected_type.unwrap_or(meta_id)
                     }
                     Type::Error => TypeId::ERROR,
                     _ => self.error(ErrType::TyperMustBeCustomtypeType { typ: self.fmt_type(meta_id) }, self.ast.get_expr_span(*typ))

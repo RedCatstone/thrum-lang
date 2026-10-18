@@ -512,6 +512,16 @@ impl TypeChecker<'_> {
         }
     }
 
+    #[must_use]
+    pub fn replace_borrow_inner_recursive(&mut self, outer: TypeId, new_inner: TypeId) -> TypeId {
+        match self.prune_type_once(outer) {
+            Type::Borrow { inner, mutable, lifetime } => {
+                let replaced_inner = self.replace_borrow_inner_recursive(inner, new_inner);
+                self.type_arena.add_type(Type::Borrow { inner: replaced_inner, mutable, lifetime })
+            }
+            _ => new_inner,
+        }
+    }
 
     pub(super) fn fmt_type(&self, typ: TypeId) -> String {
         let mut s = String::new();

@@ -1,5 +1,6 @@
 // run me by doing `cargo run Code.thrum`
 
-let x = Option.Some{ 3 }
-
-x is :Some{ 3 }
+type NewInt = int
+let x = NewInt{ 3 }
+let NewInt{ inner } = x
+inner^^

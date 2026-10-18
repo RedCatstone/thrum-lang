@@ -213,6 +213,23 @@ mod common;
 }
 
 
+#[test] fn new_type_pattern() {
+    test!("
+        type NewInt = int
+        let x = NewInt{ 3 }
+        let x = x
+        let NewInt{ inner } = x  // preserves all pointers
+        inner^^^
+    ", VmValue::Int(3));
+
+    test!("
+        type Point = (x: int, y: int)
+        let p = Point{ x: 10, y: 20 }
+        p is Point{ x: 10, y: let y } and y == 20
+    ", VmValue::Bool(true));
+}
+
+
 #[test] fn pattern_exhaustiveness() {
     test!("let true | false = true", VmValue::Void);
 }
