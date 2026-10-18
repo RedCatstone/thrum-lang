@@ -95,17 +95,10 @@ impl<'ast> TypeChecker<'ast> {
             }
 
             Pattern::Tuple(elems) => {
+                let (pointer_count, base_expected) = self.unwrap_and_record_pattern_derefs(pattern, ctx.expected_type);
+
                 let mut tuple_types = Vec::new();
                 let mut tuple_covered_cases = Vec::new();
-
-                let (pointer_count, base_expected) = if let Some(expected) = ctx.expected_type
-                    && let Some((count, _, base)) = self.count_initial_pointers(expected) {
-                        (count, Some(base))
-                    } else {
-                        (0, None)
-                    };
-
-                self.typed_ast.resolved_pattern_derefs.insert(pattern, pointer_count);
 
                 let pruned_expected = base_expected.map(|t| self.prune_type_once(t));
 
@@ -157,14 +150,7 @@ impl<'ast> TypeChecker<'ast> {
             Pattern::String { before: _, hole_parts } => {
                 let str_slice_type = self.type_arena.get_static_str_borrow();
 
-                let (pointer_count, base_expected) = if let Some(expected) = ctx.expected_type
-                    && let Some((count, _, base)) = self.count_initial_pointers(expected) {
-                        (count, Some(base))
-                    } else {
-                        (0, None)
-                    };
-
-                self.typed_ast.resolved_pattern_derefs.insert(pattern, pointer_count);
+                let (_, base_expected) = self.unwrap_and_record_pattern_derefs(pattern, ctx.expected_type);
                 if let Some(base) = base_expected {
                     self.unify_types(base, str_slice_type, span, UnifyMode::Subtype);
                 }
@@ -304,16 +290,9 @@ impl<'ast> TypeChecker<'ast> {
             }
 
             Pattern::EnumVariant { name, attached_tuple } => {
+                let (pointer_count, base_expected) = self.unwrap_and_record_pattern_derefs(pattern, ctx.expected_type);
+
                 let mut expected_refined_enum = false;
-
-                let (pointer_count, base_expected) = if let Some(expected) = ctx.expected_type
-                    && let Some((count, _, base)) = self.count_initial_pointers(expected) {
-                        (count, Some(base))
-                    } else {
-                        (0, ctx.expected_type)
-                    };
-
-                self.typed_ast.resolved_pattern_derefs.insert(pattern, pointer_count);
 
                 // using `.Variant` syntax requires that the Typechecker knows the Enumtype.
                 let resolved_variant =
@@ -373,14 +352,7 @@ impl<'ast> TypeChecker<'ast> {
             }
 
             Pattern::CompareExpr(expr) => {
-                let (pointer_count, base_expected) = if let Some(expected) = ctx.expected_type
-                    && let Some((count, _, base)) = self.count_initial_pointers(expected) {
-                        (count, Some(base))
-                    } else {
-                        (0, None)
-                    };
-
-                self.typed_ast.resolved_pattern_derefs.insert(pattern, pointer_count);
+                let (_, base_expected) = self.unwrap_and_record_pattern_derefs(pattern, ctx.expected_type);
 
                 let expr_type = self.check_expression(*expr, &mut false, CheckExprCtx::default().maybe_expect(base_expected));
 
@@ -443,6 +415,16 @@ impl<'ast> TypeChecker<'ast> {
 
 
 
+
+
+    fn unwrap_and_record_pattern_derefs(&mut self, pattern: PatternId, expected: Option<TypeId>) -> (usize, Option<TypeId>) {
+        let (pointer_count, base_expected) = match expected.and_then(|e| self.count_initial_pointers(e)) {
+            Some((count, _, base)) => (count, Some(base)),
+            None => (0, expected),
+        };
+        self.typed_ast.resolved_pattern_derefs.insert(pattern, pointer_count);
+        (pointer_count, base_expected)
+    }
 
 
     pub(super) fn check_annotation_meta_type_id(&mut self, expr: ExprId, needs_typechecking: bool) -> TypeId {
