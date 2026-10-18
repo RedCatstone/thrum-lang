@@ -1,6 +1,5 @@
 // run me by doing `cargo run Code.thrum`
 
-type NewInt = int
-let x = NewInt{ 3 }
-let NewInt{ inner } = x
-inner^^
+5 is let x
+and 10 is let z
+and 100 is let y

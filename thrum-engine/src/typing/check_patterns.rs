@@ -10,14 +10,21 @@ pub struct CheckPatternCtx<'ast, 'short> {
     expected_type: Option<TypeId>,
     explicit_type_anot: bool,
     has_value: bool,
+    can_bind_vars: bool,
     const_update: Option<&'short TypeVarConstVal>,
     vars_defined: &'short mut HashMap<&'ast str, TypeVarId>,
     or_pattern_expects_vars: Option<&'short HashMap<&'ast str, TypeVarId>>,
 }
 impl<'ast, 'short> CheckPatternCtx<'ast, 'short> {
-    pub const fn new(expected_type: Option<TypeId>, has_value: bool, vars_defined: &'short mut HashMap<&'ast str, TypeVarId>, const_update: Option<&'short TypeVarConstVal>) -> Self {
+    pub const fn new(
+        expected_type: Option<TypeId>,
+        has_value: bool,
+        can_bind_vars: bool,
+        vars_defined: &'short mut HashMap<&'ast str, TypeVarId>,
+        const_update: Option<&'short TypeVarConstVal>
+    ) -> Self {
         CheckPatternCtx {
-            expected_type, has_value, const_update, vars_defined,
+            expected_type, has_value, can_bind_vars, const_update, vars_defined,
             explicit_type_anot: false,
             or_pattern_expects_vars: None
         }
@@ -236,7 +243,11 @@ impl<'ast> TypeChecker<'ast> {
 
             Pattern::Conditional { pattern: p, cond } => {
                 let (typ, _) = self.check_match_pattern(*p, ctx.reborrow());
-                self.check_expression(*cond, &mut false, CheckExprCtx::default().expect(TypeId::BOOL));
+
+                let cond_ctx = CheckExprCtx::default()
+                    .expect(TypeId::BOOL)
+                    .allow_is_bindings(ctx.can_bind_vars);
+                self.check_expression(*cond, &mut false, cond_ctx);
 
                 typ
                 // missing cases defaults to NotCovered here, which is correct

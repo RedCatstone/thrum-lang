@@ -27,6 +27,12 @@ mod common;
     test!("1 + 1 is 1 * 1 or 2 + 2 is 2 * 2 and 3 + 3 is !3 * 3 and 4 + 4 is !4 * 4", VmValue::Bool(true));
 }
 
+#[test] fn chained_conditional_pattern_bindings() {
+    test!("5 is let x and 10 is let z and 100 is let y", VmValue::Bool(true));
+    test!("if 5 is let x and 10 is let z and 100 is let y => x + z + y else 0", VmValue::Int(115));
+    test!("if 5 is let x and 10 is 99 and 100 is let y => x + y else 0", VmValue::Int(0));
+}
+
 #[test] fn basic_or_pattern() {
     test!("7 is 5 | 6 | 7", VmValue::Bool(true));
     test!("5 is 5 | 6 | 7", VmValue::Bool(true));

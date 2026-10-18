@@ -261,7 +261,7 @@ impl TypeChecker<'_> {
                     self.enter_scope();
 
                     let (_, arm_covered) = self.check_match_pattern(arm.pattern,
-                        CheckPatternCtx::new(Some(match_val_type), true, &mut HashMap::new(), None)
+                        CheckPatternCtx::new(Some(match_val_type), true, true, &mut HashMap::new(), None)
                     );
                     covered_cases.extend(arm_covered);
 
@@ -754,7 +754,7 @@ impl TypeChecker<'_> {
 
         let mut vars_defined = HashMap::new();
         let (pattern_type, covered) = self.check_match_pattern(pattern,
-            CheckPatternCtx::new(pattern_type, value.is_some(), &mut vars_defined, const_update)
+            CheckPatternCtx::new(pattern_type, value.is_some(), can_bind_vars, &mut vars_defined, const_update)
         );
 
         let span = self.ast.get_pattern_span(pattern);
@@ -808,7 +808,7 @@ impl TypeChecker<'_> {
 
         for (&param_pattern, param_type) in closure.params.iter().zip(param_types) {
             let (_, covered) = self.check_match_pattern(param_pattern,
-                CheckPatternCtx::new(Some(param_type), true, &mut HashMap::new(), None)
+                CheckPatternCtx::new(Some(param_type), true, true, &mut HashMap::new(), None)
             );
             let remaining = PatternSpace::covered_to_missing_cases(&covered, &self.typed_ast.enum_defs);
             if !remaining.is_empty() {
