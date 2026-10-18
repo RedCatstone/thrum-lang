@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     ErrType,
     parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId},
-    typing::{Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}},
+    typing::{Lifetime, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}},
     vm_compiling::VmValue
 };
 
@@ -106,13 +106,11 @@ impl<'ast> TypeChecker<'ast> {
                     let elem_expected_type = match &pruned_expected {
                         Some(tup_type @ (Type::Tup(_) | Type::TupArr(_, _))) => {
                             Self::extract_tup_label_type(tup_type, label)
+
                                 // if the pattern was a ref to a tuple, make refs to all elements
                                 .map(|(_, typ)| if pointer_count > 0 {
-                                        self.type_arena.add_type(Type::Borrow {
-                                            inner: typ,
-                                            mutable: false,
-                                            borrows_var: None,
-                                        })
+                                        let lifetime = self.new_infer_lifetime();
+                                        self.type_arena.add_type(Type::Borrow { inner: typ, mutable: false, lifetime })
                                     } else {
                                         typ
                                     })
@@ -150,11 +148,7 @@ impl<'ast> TypeChecker<'ast> {
             }
 
             Pattern::String { before: _, hole_parts } => {
-                let str_slice_type = self.type_arena.add_type(Type::Borrow {
-                    inner: TypeId::STR,
-                    mutable: false,
-                    borrows_var: None,
-                });
+                let str_slice_type = self.type_arena.get_static_str_borrow();
 
                 let (pointer_count, base_expected) = if let Some(expected) = ctx.expected_type
                     && let Some((count, _, base)) = self.count_initial_pointers(expected) {
@@ -165,7 +159,7 @@ impl<'ast> TypeChecker<'ast> {
 
                 self.typed_ast.resolved_pattern_derefs.insert(pattern, pointer_count);
                 if let Some(base) = base_expected {
-                    self.unify_types(base, TypeId::STR, span, UnifyMode::Subtype);
+                    self.unify_types(base, str_slice_type, span, UnifyMode::Subtype);
                 }
 
                 // INVALID: "...{_}{_}..."
@@ -380,8 +374,8 @@ impl<'ast> TypeChecker<'ast> {
                 // expr was already typechecked in `get_pattern_type`
                 let expr_type = self.typed_ast.get_expr_type(*expr);
                 match self.prune_type_once(expr_type) {
-                    Type::Borrow { inner, mutable: true, borrows_var } => {
-                        if let Some(x) = borrows_var {
+                    Type::Borrow { inner, mutable: true, lifetime } => {
+                        if let Lifetime::LocalVariable(x) = lifetime {
                             self.update_variable(x, span);
                         }
                         inner
@@ -438,12 +432,12 @@ impl<'ast> TypeChecker<'ast> {
                 let span = self.ast.get_expr_span(*expr);
 
                 Some(match self.prune_type_once_infer_err(expr_type, span) {
-                    Type::Borrow { inner, mutable: true, borrows_var: _ } => {
+                    Type::Borrow { inner, mutable: true, lifetime: _ } => {
                         inner
                     }
                     Type::Error => TypeId::ERROR,
                     _ => {
-                        let err_borrow = self.type_arena.add_type(Type::Borrow { inner: TypeId::ERROR, mutable: true, borrows_var: None });
+                        let err_borrow = self.type_arena.add_type(Type::Borrow { inner: TypeId::ERROR, mutable: true, lifetime: Lifetime::Static });
                         self.type_mismatch(err_borrow, expr_type, span)
                     }
                 })

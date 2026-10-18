@@ -42,8 +42,8 @@ mod common;
     test_err!("let x: int; x + 5", ErrType::TyperCantUseUninitializedVar { .. });
     test_err!("let x; if true { x = 2 }; x^", ErrType::TyperCantUseMaybeInitializedVar { .. });
 
-    test_err!("let s = \"hello\"; s^; s^", ErrType::TyperCantUseMovedVar { .. });
-    test_err!("let s = \"blub\"; if true { s^ }; s^", ErrType::TyperCantUseMaybeMovedVar { .. });
+    test_err!("let s = Option.None; s^; s^", ErrType::TyperCantUseMovedVar { .. });
+    test_err!("let s = Option.None; if true { s^ }; s^", ErrType::TyperCantUseMaybeMovedVar { .. });
 
     test_err!("if 42 is let x => 0 else x^", ErrType::TyperUndefinedIdentifier { .. });
     test_err!("ensure 42 is let x else panic(\"{x^}\")", ErrType::TyperUndefinedIdentifier { .. });

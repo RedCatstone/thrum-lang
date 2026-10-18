@@ -37,7 +37,7 @@ pub enum Type {
 
     Fn { param_types: Vec<TypeId>, return_type: TypeId },
 
-    Borrow { inner: TypeId, mutable: bool, borrows_var: Option<TypeVarId> },
+    Borrow { inner: TypeId, mutable: bool, lifetime: Lifetime },
 
     Infer(TypeInferId),
     Error,
@@ -48,6 +48,13 @@ pub enum Type {
 pub struct TypeTuple {
     pub label: String,
     pub typ: TypeId,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
+pub enum Lifetime {
+    Static,
+    LocalVariable(TypeVarId),
+    Infer(LifetimeInferId),
 }
 
 
@@ -61,6 +68,8 @@ pub struct CustomTypeId(pub AstIds);
 pub struct TypeInferId(pub AstIds);
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub struct TypeVarId(pub AstIds);
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
+pub struct LifetimeInferId(pub AstIds);
 
 impl TypeId {
     pub const ERROR: Self = Self(0);
@@ -100,6 +109,8 @@ pub struct TypeChecker<'a> {
 
     type_impls: HashMap<TypeId, TypeVarScope<'a>>,
     curr_impl_self: Vec<TypeId>,
+
+    lifetimes: Vec<()>,
 
     // for return
     curr_function_return_type: Option<TypeId>,
@@ -187,6 +198,14 @@ impl TypeArena {
             id
         }
     }
+
+    pub(super) fn get_static_str_borrow(&mut self) -> TypeId {
+        self.add_type(Type::Borrow {
+            inner: TypeId::STR,
+            mutable: false,
+            lifetime: Lifetime::Static
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -242,6 +261,7 @@ impl TypeChecker<'_> {
             custom_types: Vec::new(),
             type_impls: HashMap::new(),
             curr_impl_self: Vec::new(),
+            lifetimes: Vec::new(),
             curr_function_return_type: None,
             curr_label_infos: Vec::new(),
             compiled_functions: FunctionRegistry::new(),
@@ -275,10 +295,16 @@ impl TypeChecker<'_> {
         }, span)
     }
 
-    pub fn new_infer_type(&mut self) -> TypeId {
+    #[must_use] pub fn new_infer_type(&mut self) -> TypeId {
         let id = TypeInferId(self.inference_types.len().try_into().unwrap());
         self.inference_types.push(None);  // unresolved initially
         self.type_arena.add_type(Type::Infer(id))
+    }
+
+    #[must_use] pub fn new_infer_lifetime(&mut self) -> Lifetime {
+        let id = LifetimeInferId(self.lifetimes.len().try_into().unwrap());
+        self.lifetimes.push(());
+        Lifetime::Infer(id)
     }
 
     #[must_use] pub fn prune_id_once(&self, mut id: TypeId) -> TypeId {
@@ -424,13 +450,14 @@ impl TypeChecker<'_> {
             }
 
 
-            (Type::Borrow { mutable: mut_a, inner: inner_a, borrows_var: borrows_a },
-            Type::Borrow { mutable: mut_b, inner: inner_b, borrows_var: _ }) => {
+            (Type::Borrow { mutable: mut_a, inner: inner_a, lifetime: life_a },
+            Type::Borrow { mutable: mut_b, inner: inner_b, lifetime: life_b }) => {
                 let new_inner = self.unify_types(inner_a, inner_b, span, mode);
                 if mut_a != mut_b {
                     *mismatch = true;
                 }
-                self.type_arena.add_type(Type::Borrow { inner: new_inner, mutable: mut_a, borrows_var: borrows_a })
+                let new_lifetime = self.unify_lifetimes(life_a, life_b);
+                self.type_arena.add_type(Type::Borrow { inner: new_inner, mutable: mut_a, lifetime: new_lifetime })
             }
 
             (Type::Fn { param_types: params_a, return_type: return_a },
@@ -452,6 +479,14 @@ impl TypeChecker<'_> {
         };
 
         result
+    }
+
+    pub const fn unify_lifetimes(&mut self, a: Lifetime, b: Lifetime) -> Lifetime {
+        match (a, b) {
+            (Lifetime::Static, other) | (other, Lifetime::Static) => other,
+            (Lifetime::LocalVariable(v), _) | (_, Lifetime::LocalVariable(v)) => Lifetime::LocalVariable(v),
+            (Lifetime::Infer(id), _) => Lifetime::Infer(id),
+        }
     }
 
     fn unify_type_vec(&mut self, types: &[TypeId], span: Span) -> TypeId {
@@ -543,15 +578,19 @@ impl TypeChecker<'_> {
                 self.write_type(return_type, s)
             }
 
-            Type::Borrow { inner, mutable, borrows_var } => {
+            Type::Borrow { inner, mutable, lifetime } => {
+                write!(s, "&")?;
+
+                match lifetime {
+                    Lifetime::Static => write!(s, "'static ")?,
+                    Lifetime::LocalVariable(var) => write!(s, "'({}) ", self.typed_ast.get_var(var).name)?,
+                    Lifetime::Infer(lifetime_infer_id) => write!(s, "'({lifetime_infer_id:?}) ")?,
+                }
+
                 if mutable {
                     write!(s, "mut ")?;
                 }
-                write!(s, "ref ")?;
                 self.write_type(inner, s)?;
-                if let Some(var) = borrows_var {
-                    write!(s, " ({})", self.typed_ast.get_var(var).name)?;
-                }
                 Ok(())
             }
         }
@@ -660,9 +699,9 @@ impl TypeChecker<'_> {
                 let typ = trans(self, typ);
                 self.type_arena.add_type(Type::TupArr(typ, len))
             }
-            Type::Borrow { inner, mutable, borrows_var } => {
+            Type::Borrow { inner, mutable, lifetime } => {
                 let inner = trans(self, inner);
-                self.type_arena.add_type(Type::Borrow { inner, mutable, borrows_var })
+                self.type_arena.add_type(Type::Borrow { inner, mutable, lifetime })
             }
             Type::EnumVariant { inner, variant } => {
                 let inner = trans(self, inner);

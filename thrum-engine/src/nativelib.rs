@@ -16,17 +16,19 @@ pub struct ThrumModule {
 }
 
 
-pub fn get_native_lib(_type_arena: &mut TypeArena) -> ThrumModule {
+pub fn get_native_lib(type_arena: &mut TypeArena) -> ThrumModule {
     let mut std_module = ThrumModule::default();
+
+    let str_slice_type = type_arena.get_static_str_borrow();
 
     let mut io_module = ThrumModule::default();
     io_module.values.insert("print".to_string(), ThrumValue {
-        typ: Type::Fn { param_types: vec![TypeId::STR], return_type: TypeId::VOID },
+        typ: Type::Fn { param_types: vec![str_slice_type], return_type: TypeId::VOID },
         val: VmValue::NativeFn(native_print),
         is_prelude: true,
     });
     io_module.values.insert("panic".to_string(), ThrumValue {
-        typ: Type::Fn { param_types: vec![TypeId::STR], return_type: TypeId::NEVER },
+        typ: Type::Fn { param_types: vec![str_slice_type], return_type: TypeId::NEVER },
         val: VmValue::NativeFn(native_panic),
         is_prelude: true,
     });
@@ -39,7 +41,7 @@ pub fn get_native_lib(_type_arena: &mut TypeArena) -> ThrumModule {
 
     let mut str_methods = HashMap::new();
     str_methods.insert("len".to_string(), ThrumValue {
-        typ: Type::Fn { param_types: vec![TypeId::STR], return_type: TypeId::STR },
+        typ: Type::Fn { param_types: vec![str_slice_type], return_type: TypeId::INT },
         val: VmValue::NativeFn(native_str_len),
         is_prelude: true
     });
@@ -61,20 +63,20 @@ pub fn get_native_lib(_type_arena: &mut TypeArena) -> ThrumModule {
 
 
 pub fn native_print(val: &[VmValue]) -> Result<VmValue, ErrType> {
-    let VmValue::Str(str) = &val[0] else { panic!("function called with wrong argument...") };
-    println!("{str}");
+    let VmValue::Slice(slice) = &val[0] else { panic!("function called with wrong argument...") };
+    println!("{}", slice.as_str());
 
     Ok(VmValue::Void)
 }
 
 pub fn native_panic(val: &[VmValue]) -> Result<VmValue, ErrType> {
-    let VmValue::Str(str) = &val[0] else { panic!("function called with wrong argument...") };
-    println!("{str}");
+    let VmValue::Slice(slice) = &val[0] else { panic!("function called with wrong argument...") };
+    println!("{}", slice.as_str());
 
-    Err(ErrType::RuntimeError { msg: str.clone() })
+    Err(ErrType::RuntimeError { msg: slice.as_str().to_string() })
 }
 
 pub fn native_str_len(val: &[VmValue]) -> Result<VmValue, ErrType> {
-    let VmValue::Str(str) = &val[0] else { panic!("function called with wrong argument...") };
-    Ok(VmValue::Int(str.len().try_into().unwrap()))
+    let VmValue::Slice(slice) = &val[0] else { panic!("function called with wrong argument...") };
+    Ok(VmValue::Int(slice.len.try_into().unwrap()))
 }

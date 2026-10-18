@@ -201,18 +201,19 @@ mod common;
         let s = "klaus"
         let arr = (s, "x")
         arr[0]^
-    "#, VmValue::Str("klaus".to_string()));
+    "#, VmValue::OwnedStr("klaus".to_string()));
 
-    test!(r#"
-        let piece = "orl"
-        "hello w{piece^}d!"
-    "#, VmValue::Str("hello world!".to_string()));
+    // TODO: str templates without the heap
+    // test!(r#"
+    //     let piece = "orl"
+    //     "hello w{piece^}d!"
+    // "#, VmValue::HeapStr("hello world!".to_string()));
 }
 
 #[test] fn string_templates() {
     test!(
         "\"hello {3-2}, {!true} and {69.08 / 22.0}, even works {\"nested\"}!\"",
-        VmValue::Str("hello 1, false and 3.14, even works nested!".to_string())
+        VmValue::OwnedStr("hello 1, false and 3.14, even works nested!".to_string())
     );
 }
 

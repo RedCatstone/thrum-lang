@@ -1,8 +1,12 @@
 // run me by doing `cargo run Code.thrum`
 
-let s = "cat"
-if s is "ca{let x}" {
-    "it was: {x}"
+let x = "do_a_g"
+let x = x
+let x = x
+
+if x is "do{let sub}g"
+and sub is "_a_" {
+    "yes"
 } else {
-    "nop"
+    "no"
 }

@@ -3,9 +3,7 @@ use std::collections::HashMap;
 use derive_more::Display;
 
 use crate::{
-    ErrType, lexing::tokens::Span, nativelib::ThrumModule, parsing::ast::{AstEnumExpression, Expr, ExprId, PatternId},
-    typing::{CustomTypeId, EnumDefinition, EnumId, LabelInfo, Type, TypeChecker, TypeId, TypeVarId, check_expressions::CheckExprCtx},
-    vm_compiling::{VmValue, VmCompiler}
+    ErrType, lexing::tokens::Span, nativelib::ThrumModule, parsing::ast::{AstEnumExpression, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumDefinition, EnumId, LabelInfo, Lifetime, Type, TypeChecker, TypeId, TypeVarId, check_expressions::CheckExprCtx}, vm_compiling::{VmCompiler, VmValue}
 };
 
 
@@ -348,7 +346,7 @@ impl<'ast> TypeChecker<'ast> {
             var.is_used = TypeVarIsUsed::Immut;
         }
 
-        self.type_arena.add_type(Type::Borrow { mutable, inner, borrows_var: Some(var_id) })
+        self.type_arena.add_type(Type::Borrow { mutable, inner, lifetime: Lifetime::LocalVariable(var_id) })
     }
 
 

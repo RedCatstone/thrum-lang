@@ -166,14 +166,20 @@ mod common;
     test!(r#"
         if "hello cat from Earth!" is let "hello {name} from {location}!" => (name, location)
         else panic("")
-    "#, VmValue::Tup(vec![VmValue::Str("cat".to_string()), VmValue::Str("Earth".to_string())]));
+    "#, VmValue::Tup(vec![VmValue::OwnedStr("cat".to_string()), VmValue::OwnedStr("Earth".to_string())]));
+
+    test!(r#"  "hello" is "h{"e{"l"}"}lo"  "#, VmValue::Bool(true));
+
+    // kinda annoying that this returns false, but technically it makes sense.
+    // it fails because the first hole gets `""` and compares that to `"l"`
+    test!(r#"  "ll" is "{"l"}l{_}"  "#, VmValue::Bool(false));
 }
 
 #[test] fn string_pattern_multiple_consecutive_holes() {
     test!(r#"
         if "<1, 2, 3>" is let "<{num1}, {num2}, {num3}>" => "{num1}{num2}{num3}"
         else "nop"
-    "#, VmValue::Str("123".to_string()));
+    "#, VmValue::OwnedStr("123".to_string()));
 }
 
 
@@ -218,7 +224,7 @@ mod common;
         is (0, "") => "nope3"
         is (69, let x) => x^
         is _ => "nope4"
-    "#, VmValue::Str("yay!".to_string()));
+    "#, VmValue::OwnedStr("yay!".to_string()));
 
     test!("
         let val: Option = :Some{ 42 }

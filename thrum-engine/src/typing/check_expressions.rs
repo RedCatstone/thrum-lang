@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, ResolvedMemberAccess, ResolvedTypeInstantiation, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternCtx, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
+    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, Lifetime, ResolvedMemberAccess, ResolvedTypeInstantiation, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternCtx, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
 };
 
 
@@ -60,7 +60,8 @@ impl TypeChecker<'_> {
                 for &elem in elems {
                     self.check_expression(elem, is_never, ctx);
                 }
-                TypeId::STR
+                // TODO: make this a special TemplateString borrow struct, meaning that it would work without the heap
+                self.type_arena.get_static_str_borrow()
             }
 
             Expr::Tuple { elems } => {
@@ -109,7 +110,7 @@ impl TypeChecker<'_> {
                 let left_pointer_type = self.check_expression(*left, is_never, arr_ctx.auto_deref(AutoDerefMode::LeaveOnePointer));
 
                 let left_span = self.ast.get_expr_span(*left);
-                if let Type::Borrow { inner, mutable, borrows_var } = self.prune_type_once_infer_err(left_pointer_type, left_span) {
+                if let Type::Borrow { inner, mutable, lifetime } = self.prune_type_once_infer_err(left_pointer_type, left_span) {
 
                     let arr_inner_type = match self.prune_type_once_infer_err(inner, left_span) {
                         Type::TupArr(inner, _) => inner,
@@ -132,7 +133,7 @@ impl TypeChecker<'_> {
 
                     self.check_expression(*index, is_never, ctx.expect(TypeId::INT));
 
-                    self.type_arena.add_type(Type::Borrow { inner: arr_inner_type, mutable, borrows_var })
+                    self.type_arena.add_type(Type::Borrow { inner: arr_inner_type, mutable, lifetime })
                 }
                 else {
                     let arr_type = self.type_arena.add_type(Type::TupArr(TypeId::ERROR, 1));
@@ -337,8 +338,8 @@ impl TypeChecker<'_> {
                 let expr_type = self.check_expression(*expr, is_never, ctx);
 
                 match self.prune_type_once_infer_err(expr_type, span) {
-                    Type::Borrow { inner, mutable: _, borrows_var } => {
-                        let auto_clone = self.check_deref_memory_rules(inner, borrows_var, span);
+                    Type::Borrow { inner, mutable: _, lifetime } => {
+                        let auto_clone = self.check_deref_memory_rules(inner, lifetime, span);
 
                         if !auto_clone {
                             self.typed_ast.move_expr.insert(check_expr);
@@ -559,10 +560,10 @@ impl TypeChecker<'_> {
 
     fn check_literal(&mut self, val: &AstValue) -> TypeId {
         match val {
-            AstValue::NumInt(_) => self.type_arena.add_type(Type::NumInt),
-            AstValue::NumFloat(_) => self.type_arena.add_type(Type::NumFloat),
-            AstValue::Str(_) => self.type_arena.add_type(Type::Str),
-            AstValue::Bool(_) => self.type_arena.add_type(Type::Bool),
+            AstValue::NumInt(_) => TypeId::INT,
+            AstValue::NumFloat(_) => TypeId::FLOAT,
+            AstValue::Str(_) => self.type_arena.get_static_str_borrow(),
+            AstValue::Bool(_) => TypeId::BOOL,
         }
     }
 
@@ -875,8 +876,10 @@ impl TypeChecker<'_> {
                 if let Some((index, elem_type)) = found_data {
                     // if we came from a ref keep that ref
                     return if let Some((mutable, borrows_var)) = came_from_ref {
+                        let lifetime = borrows_var.map_or(Lifetime::Static, Lifetime::LocalVariable);
+
                         self.typed_ast.resolved_member_access.insert(member_expr, ResolvedMemberAccess::TupleRefIndex { index });
-                        self.type_arena.add_type(Type::Borrow { inner: elem_type, mutable, borrows_var })
+                        self.type_arena.add_type(Type::Borrow { inner: elem_type, mutable, lifetime })
                     } else {
                         self.typed_ast.resolved_member_access.insert(member_expr, ResolvedMemberAccess::TupleIndex { index });
                         elem_type
@@ -906,7 +909,7 @@ impl TypeChecker<'_> {
                         let constant = VmValue::Type(refined_type);
                         self.typed_ast.resolved_member_access.insert(member_expr, ResolvedMemberAccess::Member { constant });
 
-                        self.type_arena.add_type(Type::Borrow { inner: TypeId::TYPE, mutable: false, borrows_var: None })
+                        self.type_arena.add_type(Type::Borrow { inner: TypeId::TYPE, mutable: false, lifetime: Lifetime::Static })
                     }
                     else {
                         // otherwise, its a runtime enum value
@@ -954,7 +957,7 @@ impl TypeChecker<'_> {
                 return self.member_access_magic_wrapping(resolved_type, custom_id, custom_inner, member_expr)
             }
 
-            Type::Borrow { inner, mutable, borrows_var } => {
+            Type::Borrow { inner, mutable, lifetime } => {
                 // if we already came from a borrow before this borrow, just deref it
                 // this function does not support (double ref).access
                 if came_from_ref.is_some() {
@@ -964,7 +967,11 @@ impl TypeChecker<'_> {
                 // now continue checking the member_access using the inner borrow type.
                 // also keep track of the borrows_var
                 // e.g. `tup.y` tup is a ref, so the final thing will also be a ref.
-                return self.check_member_access(inner, member_expr, Some((mutable, borrows_var)), came_from_meta, expected_type)
+                let lifetime = match lifetime {
+                    Lifetime::LocalVariable(var) => Some(var),
+                    _ => None,
+                };
+                return self.check_member_access(inner, member_expr, Some((mutable, lifetime)), came_from_meta, expected_type)
             }
 
             Type::EnumVariant { inner, variant: _ } => {

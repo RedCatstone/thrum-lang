@@ -18,8 +18,9 @@ pub enum VmValue {
     Int(i64),
     #[display("{_0:?}")]
     Float(f64),
-    #[display("\"{_0}\"")]
-    Str(String),
+    #[display("^\"{_0}\"")]
+    // OwnedStr's are not produced at runtime. They exist for the constant pool.
+    OwnedStr(String),
     #[display("{_0}")]
     Bool(bool),
 
@@ -30,7 +31,7 @@ pub enum VmValue {
     // this SHOULD be fully safe, since the borrow checker checked all the lifetimes.
     #[display("*<{_0:?}>")]
     ValuePointer(*mut Self),
-    #[display("slice<\"{}\">", _0.as_str())]
+    #[display("\"{}\"", _0.as_str())]
     Slice(VmSlice),
     #[display("nativeFn<{_0:?}>")]
     NativeFn(fn(&[Self]) -> Result<Self, ErrType>),
@@ -74,7 +75,7 @@ impl PartialOrd for VmValue {
         match (self, other) {
             (Self::Int(l), Self::Int(r)) => l.partial_cmp(r),
             (Self::Float(l), Self::Float(r)) => l.partial_cmp(r),
-            (Self::Str(l), Self::Str(r)) => l.partial_cmp(r),
+            (Self::OwnedStr(l), Self::OwnedStr(r)) => l.partial_cmp(r),
             (Self::Bool(l), Self::Bool(r)) => l.partial_cmp(r),
             (Self::Tup(l), Self::Tup(r)) => l.partial_cmp(r),
             (Self::ValuePointer(l), Self::ValuePointer(r)) => l.partial_cmp(r),
@@ -82,6 +83,9 @@ impl PartialOrd for VmValue {
             (Self::Fn { slot: l }, Self::Fn { slot: r }) => l.partial_cmp(r),
             (Self::Void, Self::Void) | (Self::Empty, Self::Empty) => Some(std::cmp::Ordering::Equal),
             (Self::Type(l), Self::Type(r)) => l.partial_cmp(r),
+
+            // this case literally only exists for `cargo test`s
+            (Self::Slice(l), Self::OwnedStr(r)) => l.as_str().partial_cmp(r),
 
             _ => panic!("comparing {self:?} with {other:?} is not implemented...")
         }
@@ -93,7 +97,7 @@ impl From<AstValue> for VmValue {
         match value {
             AstValue::NumInt(v) => Self::Int(v),
             AstValue::NumFloat(v) => Self::Float(v),
-            AstValue::Str(v) => Self::Str(v),
+            AstValue::Str(v) => Self::OwnedStr(v),
             AstValue::Bool(v) => Self::Bool(v),
         }
     }
@@ -825,8 +829,11 @@ impl VmCompiler<'_> {
     }
 
     fn push_get_constant_op(&mut self, val: VmValue) {
+        let is_string = matches!(val, VmValue::OwnedStr(_));
+
         let const_index = self.add_constant(val);
-        self.push_op(OpCode::ConstGet { const_index });
+        let op = if is_string { OpCode::ConstGetSlice { const_index } } else { OpCode::ConstGet { const_index } };
+        self.push_op(op);
     }
     fn push_get_constant_ref_op(&mut self, val: VmValue) {
         if let VmValue::Fn { slot } = val
@@ -840,10 +847,8 @@ impl VmCompiler<'_> {
             self.compile_and_insert_function(closure.body, &closure.params, slot);
         }
 
-        let is_string = matches!(val, VmValue::Str(_));
-
         let const_index = self.add_constant(val);
-        self.push_op(if is_string { OpCode::ConstGetSlice { const_index } } else { OpCode::ConstGetRef { const_index } });
+        self.push_op(OpCode::ConstGetRef { const_index });
     }
 
     fn define_local(&mut self, var_id: TypeVarId, const_value: Option<VmValue>) -> usize {
@@ -883,12 +888,7 @@ impl VmCompiler<'_> {
                 self.push_get_constant_ref_op(val.clone());
             }
             Some(CompilerVar::AtSlot(slot)) => {
-                let op = if self.typed_ast.get_var(var_id).typ == TypeId::STR {
-                    OpCode::LocalSlice { local_index: *slot }
-                } else {
-                    OpCode::LocalPointer { local_index: *slot }
-                };
-                self.push_op(op);
+                self.push_op(OpCode::LocalPointer { local_index: *slot });
             }
         }
     }
@@ -1025,7 +1025,7 @@ impl VmCompiler<'_> {
 
             Pattern::String { before, hole_parts } => {
                 if hole_parts.is_empty() {
-                    self.push_get_constant_op(VmValue::Str(before.clone()));
+                    self.push_get_constant_op(VmValue::OwnedStr(before.clone()));
                     self.push_op(if is_pointer_compare { OpCode::CmpEqualPointer } else { OpCode::CmpEqual });
                     failure_jumps.push(FailureJump {
                         jump_loc: self.push_jump_if_false_op_for_patching(),
@@ -1033,7 +1033,11 @@ impl VmCompiler<'_> {
                     });
                 }
                 else {
-                    let before_id = self.add_constant(VmValue::Str(before.clone()));
+                    if is_pointer_compare {
+                        self.push_op(OpCode::PointerGetClone);
+                    }
+
+                    let before_id = self.add_constant(VmValue::OwnedStr(before.clone()));
                     self.push_op(OpCode::StrTrimPrefix { const_str: before_id });
                     failure_jumps.push(FailureJump {
                         jump_loc: self.push_jump_if_false_op_for_patching(),
@@ -1043,7 +1047,7 @@ impl VmCompiler<'_> {
                     for (i, (hole_pat, hole_after)) in hole_parts.iter().enumerate() {
                         let is_last_hole = i == hole_parts.len() - 1;
 
-                        let after_id = self.add_constant(VmValue::Str(hole_after.clone()));
+                        let after_id = self.add_constant(VmValue::OwnedStr(hole_after.clone()));
                         if is_last_hole {
                             self.push_op(OpCode::StrTrimSuffix { const_str: after_id });
                         } else {
