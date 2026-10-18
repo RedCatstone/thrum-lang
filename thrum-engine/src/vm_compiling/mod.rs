@@ -1005,11 +1005,12 @@ impl VmCompiler<'_> {
             Pattern::EnumVariant { name: _, attached_tuple } => {
                 let (_enum_id, i) = self.typed_ast.resolved_enum_variant_pattern[&compile_pattern];
 
-                self.push_op(OpCode::TupUnpack { length: 2 });
+
+                self.push_op(if is_pointer_compare { OpCode::TupPointerUnpack { length: 2 } } else { OpCode::TupUnpack { length: 2 } });
 
                 // compare the enum tags
                 self.push_get_constant_op(VmValue::Int(i.try_into().unwrap()));
-                self.push_op(OpCode::CmpEqual);
+                self.push_op(if is_pointer_compare { OpCode::CmpEqualPointer } else { OpCode::CmpEqual });
                 failure_jumps.push(FailureJump {
                     jump_loc: self.push_jump_if_false_op_for_patching(),
                     temps: self.cur_temp_amount

@@ -1,12 +1,5 @@
 // run me by doing `cargo run Code.thrum`
 
-let x = "do_a_g"
-let x = x
-let x = x
+let x = Option.Some{ 3 }
 
-if x is "do{let sub}g"
-and sub is "_a_" {
-    "yes"
-} else {
-    "no"
-}
+x is :Some{ 3 }

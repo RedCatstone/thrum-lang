@@ -289,9 +289,18 @@ impl<'ast> TypeChecker<'ast> {
             Pattern::EnumVariant { name, attached_tuple } => {
                 let mut expected_refined_enum = false;
 
+                let (pointer_count, base_expected) = if let Some(expected) = ctx.expected_type
+                    && let Some((count, _, base)) = self.count_initial_pointers(expected) {
+                        (count, Some(base))
+                    } else {
+                        (0, ctx.expected_type)
+                    };
+
+                self.typed_ast.resolved_pattern_derefs.insert(pattern, pointer_count);
+
                 // using `.Variant` syntax requires that the Typechecker knows the Enumtype.
                 let resolved_variant =
-                    if let Some(expected) = ctx.expected_type
+                    if let Some(expected) = base_expected
                     && let Type::EnumVariant { inner, variant } = self.prune_type_once(expected) {
                         // its a hard refined enum
                         // e.g. `let .Some{ inner } = Option.Some{ 123 }`
@@ -308,7 +317,7 @@ impl<'ast> TypeChecker<'ast> {
                         Some((enum_id, variant, attached_type, expected))
                     }
                     else {
-                        self.check_enum_variant(name, ctx.expected_type, Some(span))
+                        self.check_enum_variant(name, base_expected, Some(span))
                     };
 
 
@@ -316,7 +325,13 @@ impl<'ast> TypeChecker<'ast> {
                     // now that we found a variant, handle the inner data
 
                     let inner_covered = if let Some(tup) = attached_tuple {
-                        self.check_match_pattern(*tup, ctx.with_expected(Some(attached_type))).1
+                        let elem_expected_type = if pointer_count > 0 {
+                            let lifetime = self.new_infer_lifetime();
+                            self.type_arena.add_type(Type::Borrow { inner: attached_type, mutable: false, lifetime })
+                        } else {
+                            attached_type
+                        };
+                        self.check_match_pattern(*tup, ctx.with_expected(Some(elem_expected_type))).1
                     } else {
                         self.unify_types(TypeId::VOID, attached_type, span, UnifyMode::Subtype);
                         vec![PatternSpace::All]
@@ -329,7 +344,12 @@ impl<'ast> TypeChecker<'ast> {
                         }
                     }
                     self.typed_ast.resolved_enum_variant_pattern.insert(pattern,(enum_id,variant_index));
-                    final_type
+
+                    if pointer_count > 0 {
+                        ctx.expected_type.unwrap()
+                    } else {
+                        final_type
+                    }
                 } else {
                     TypeId::ERROR
                 }

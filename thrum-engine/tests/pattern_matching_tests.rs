@@ -188,22 +188,27 @@ mod common;
     // TODO: remove ^ in enum matching
     test!("
         let x: Option = :None
-        x^ is :None
+        x is :None
     ", VmValue::Bool(true));
 
     test!("
         const Dir = enum { Up, Down{ bool, bool } }
         let up: Dir = :Up
-        up^ is :Down{ _, _ }
+        up is :Down{ _, _ }
     ", VmValue::Bool(false));
 }
 
 #[test] fn enum_pattern_with_data() {
     test!("Option.Some{ 3 } is :Some{ 3 }", VmValue::Bool(true));
+    test!("Option.Some{ 3 } is :Some{ 2 }", VmValue::Bool(false));
+    test!("let x = Option.Some{ 3 }; x is :Some{ 3 }", VmValue::Bool(true));
+    test!("let x = Option.Some{ 3 }; x is :Some{ 2 }", VmValue::Bool(false));
+    test!("let x = Option.Some{ 3 }; let x = x; x is :Some{ 3 }", VmValue::Bool(true));
+
     test!("
         const Dir = enum { Up, Down{ bool, bool } }
         let down: Dir = :Down{ true, false }
-        down^ is :Down{ true, !true }
+        down is :Down{ true, !true }
     ", VmValue::Bool(true));
 }
 
