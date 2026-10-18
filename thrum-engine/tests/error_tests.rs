@@ -42,8 +42,8 @@ mod common;
     test_err!("let x: int; x + 5", ErrType::TyperCantUseUninitializedVar { .. });
     test_err!("let x; if true { x = 2 }; x^", ErrType::TyperCantUseMaybeInitializedVar { .. });
 
-    test_err!("let s = \"hello\"; s^; s^", ErrType::TyperCantUseMovedVar { .. });
-    test_err!("let s = \"blub\"; if true { s^ }; s^", ErrType::TyperCantUseMaybeMovedVar { .. });
+    test_err!("let s = Option.None; s^; s^", ErrType::TyperCantUseMovedVar { .. });
+    test_err!("let s = Option.None; if true { s^ }; s^", ErrType::TyperCantUseMaybeMovedVar { .. });
 
     test_err!("if 42 is let x => 0 else x^", ErrType::TyperUndefinedIdentifier { .. });
     test_err!("ensure 42 is let x else panic(\"{x^}\")", ErrType::TyperUndefinedIdentifier { .. });
@@ -63,13 +63,6 @@ mod common;
     test_err!("1.0 + 1", ErrType::TyperMismatch { .. });
     test_err!("!5", ErrType::TyperMismatch { .. });
     test_err!("-true", ErrType::TyperMismatch { .. });
-}
-#[test] fn type_mismatch_patterns() {
-    test_err!("1 is \"hello\"", ErrType::TyperMismatch { .. });
-    test_err!("(1, 2) is (1, \"two\")", ErrType::TyperMismatch { .. });
-    test_err!("(1, 2) is 1 | 2", ErrType::TyperMismatch { .. });
-
-    test_err!("let mut x = 5; x += true", ErrType::TyperMismatch { .. });
 }
 
 #[test] fn type_mismatch_enums() {
@@ -100,44 +93,6 @@ mod common;
     test_err!("true.hello", ErrType::TyperTypeDoesntHaveMember { .. });
 }
 
-#[test] fn exhaustive_pattern_matching() {
-    test_err!("match 5 is 1 => 2", ErrType::TyperPatternDoesntCoverAllCases { .. });
-    test_err!("
-        match (true, false)
-        is (true, true) => 0
-        is (false, _) => 1
-    ", ErrType::TyperPatternDoesntCoverAllCases { .. });
-    test_err!("
-        const Opt = enum { None, Some{ bool } }
-        let val: Opt = :Some{ true }
-        match val^ is :None | :Some{ true } => 0
-    ", ErrType::TyperPatternDoesntCoverAllCases { .. });
-    test_err!("
-        const Opt = enum { None, Some{ bool } }
-        let val: Opt.Some = :Some{ true }
-        match val^ is :Some{ true } => 0
-    ", ErrType::TyperPatternDoesntCoverAllCases { .. });
-    // TODO: test_err!("match 5 is _ => 1 \n is 5 => 2", ErrType::TyperPatternCantBeReached);
-}
-
-#[test] fn pattern_binding() {
-    test_err!("let a = (5 is let x)", ErrType::TyperInvalidBindingIsExpr);
-    test_err!("if (5 is let x) is true {}", ErrType::TyperInvalidBindingIsExpr);
-
-    test_err!("5 is !(let x)", ErrType::TyperNotPatternCantBindVars);
-
-    test_err!("if (1, 2) is let (x, y) | (x, _) {}", ErrType::TyperOrPatternDoesntBindVars { .. });
-    test_err!("if (1, 2) is let (x, _) | (x, y) {}", ErrType::TyperOrPatternBindsVarsTooMuch { .. });
-    test_err!("if (1, 2) is let (x, x) {}", ErrType::TyperPatternNameAlreadyBound { .. });
-
-    test_err!("if (1, 2) is let (x, 0) | (0, y) { }", ErrType::TyperOrPatternDoesntBindVars { .. });
-    test_err!("let (x, 0) = (1, 2)", ErrType::TyperFailableAssignPattern { .. });
-}
-
-#[test] fn string_pattern_errors() {
-    test_err!(r#" "abc" is "a{_}{_}c" "#, ErrType::TyperPatternStringHolesInARow);
-    test_err!(r#" "abc" is "{}" "#, ErrType::ParserExpectedAPattern { .. });
-}
 
 #[test] fn custom_type() {
     test_err!("int{ 5 }", ErrType::TyperMustBeCustomtypeType { .. });

@@ -18,8 +18,9 @@ pub enum VmValue {
     Int(i64),
     #[display("{_0:?}")]
     Float(f64),
-    #[display("\"{_0}\"")]
-    Str(String),
+    #[display("^\"{_0}\"")]
+    // OwnedStr's are not produced at runtime. They exist for the constant pool.
+    OwnedStr(String),
     #[display("{_0}")]
     Bool(bool),
 
@@ -30,6 +31,8 @@ pub enum VmValue {
     // this SHOULD be fully safe, since the borrow checker checked all the lifetimes.
     #[display("*<{_0:?}>")]
     ValuePointer(*mut Self),
+    #[display("\"{}\"", _0.as_str())]
+    Slice(VmSlice),
     #[display("nativeFn<{_0:?}>")]
     NativeFn(fn(&[Self]) -> Result<Self, ErrType>),
     #[display("fn<{slot}>")]
@@ -49,23 +52,40 @@ pub enum VmValue {
     Empty,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct VmSlice {
+    pub ptr: *const u8,
+    pub len: usize,
+}
+impl VmSlice {
+    #[must_use] pub const fn as_str(&self) -> &str {
+        unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.ptr, self.len))
+        }
+    }
+}
+
 impl PartialEq for VmValue {
-    fn eq(&self, other: &Self) -> bool {
+    #[track_caller] fn eq(&self, other: &Self) -> bool {
         self.partial_cmp(other) == Some(std::cmp::Ordering::Equal)
     }
 }
 impl PartialOrd for VmValue {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    #[track_caller] fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match (self, other) {
             (Self::Int(l), Self::Int(r)) => l.partial_cmp(r),
             (Self::Float(l), Self::Float(r)) => l.partial_cmp(r),
-            (Self::Str(l), Self::Str(r)) => l.partial_cmp(r),
+            (Self::OwnedStr(l), Self::OwnedStr(r)) => l.partial_cmp(r),
             (Self::Bool(l), Self::Bool(r)) => l.partial_cmp(r),
             (Self::Tup(l), Self::Tup(r)) => l.partial_cmp(r),
             (Self::ValuePointer(l), Self::ValuePointer(r)) => l.partial_cmp(r),
+            (Self::Slice(l), Self::Slice(r)) => l.as_str().partial_cmp(r.as_str()),
             (Self::Fn { slot: l }, Self::Fn { slot: r }) => l.partial_cmp(r),
             (Self::Void, Self::Void) | (Self::Empty, Self::Empty) => Some(std::cmp::Ordering::Equal),
             (Self::Type(l), Self::Type(r)) => l.partial_cmp(r),
+
+            // this case literally only exists for `cargo test`s
+            (Self::Slice(l), Self::OwnedStr(r)) => l.as_str().partial_cmp(r),
 
             _ => panic!("comparing {self:?} with {other:?} is not implemented...")
         }
@@ -77,7 +97,7 @@ impl From<AstValue> for VmValue {
         match value {
             AstValue::NumInt(v) => Self::Int(v),
             AstValue::NumFloat(v) => Self::Float(v),
-            AstValue::Str(v) => Self::Str(v),
+            AstValue::Str(v) => Self::OwnedStr(v),
             AstValue::Bool(v) => Self::Bool(v),
         }
     }
@@ -89,6 +109,7 @@ pub enum OpCode {
     // Data Access
     ConstGet { const_index: usize },
     ConstGetRef { const_index: usize },
+    ConstGetSlice { const_index: usize },
     PushVoid,
 
     // Temps
@@ -98,6 +119,7 @@ pub enum OpCode {
     // Locals
     LocalSet { local_index: usize },
     LocalPointer { local_index: usize },
+    LocalSlice { local_index: usize },
 
     // Pointers
     PointerGetClone,
@@ -105,7 +127,7 @@ pub enum OpCode {
     PointerSet,
 
     // Math & Logic
-    CmpEqual, CmpLess, CmpGreater,
+    CmpEqual, CmpEqualPointer, CmpLess, CmpGreater,
     NumAdd { num_mode: NumMode }, NumSubtract { num_mode: NumMode },
     NumMultiply { num_mode: NumMode }, NumDivide { num_mode: NumMode },
     NumModulo { num_mode: NumMode }, NumNegate { num_mode: NumMode },
@@ -118,6 +140,7 @@ pub enum OpCode {
     TupGet { index: usize },
     TupPointerIndex,
     TupUnpack { length: usize },
+    TupPointerUnpack { length: usize },
 
     // Strings
     StrAdd,
@@ -163,7 +186,7 @@ struct OpCodeRuntimeTempDiff { requires: usize, diff: isize }
 impl OpCode {
     fn runtime_temp_effect(&self) -> OpCodeRuntimeTempDiff {
         match self {
-            Self::ConstGet { .. } | Self::ConstGetRef { .. }
+            Self::ConstGet { .. } | Self::ConstGetRef { .. } | Self::ConstGetSlice { .. } | Self::LocalSlice { .. }
             | Self::PushVoid | Self::LocalPointer { .. } => OpCodeRuntimeTempDiff { requires: 0, diff: 1 },
 
             Self::ValuePop | Self::LocalSet { .. } | Self::JumpIfFalse { .. } => OpCodeRuntimeTempDiff { requires: 1, diff: -1 },
@@ -181,7 +204,7 @@ impl OpCode {
             | Self::Return | Self::Panic
             | Self::TypeTupToTupType { labels: _ } => OpCodeRuntimeTempDiff { requires: 1, diff: 0 },
 
-            Self::CmpEqual | Self::CmpLess | Self::CmpGreater
+            Self::CmpEqual | Self::CmpEqualPointer | Self::CmpLess | Self::CmpGreater
             | Self::TupPointerIndex
             | Self::NumAdd { num_mode: _ } | Self::NumSubtract { num_mode: _ }
             | Self::NumMultiply { num_mode: _ } | Self::NumDivide { num_mode: _ } | Self::NumModulo { num_mode: _ }
@@ -190,7 +213,9 @@ impl OpCode {
             Self::StrTemplate { length }
             | Self::TupCreate { length } => OpCodeRuntimeTempDiff { requires: *length, diff: 1 - isize::try_from(*length).unwrap() },
 
-            Self::TupUnpack { length } => OpCodeRuntimeTempDiff { requires: 1, diff: isize::try_from(*length).unwrap() - 1 },
+            Self::TupUnpack { length }
+            | Self::TupPointerUnpack { length } => OpCodeRuntimeTempDiff { requires: 1, diff: isize::try_from(*length).unwrap() - 1 },
+
             Self::Jump { .. } | Self::NoOp => OpCodeRuntimeTempDiff { requires: 0, diff: 0 },
             Self::CallFn { arg_count } => OpCodeRuntimeTempDiff { requires: *arg_count, diff: -isize::try_from(*arg_count).unwrap() },
         }
@@ -804,13 +829,16 @@ impl VmCompiler<'_> {
     }
 
     fn push_get_constant_op(&mut self, val: VmValue) {
+        let is_string = matches!(val, VmValue::OwnedStr(_));
+
         let const_index = self.add_constant(val);
-        self.push_op(OpCode::ConstGet { const_index });
+        let op = if is_string { OpCode::ConstGetSlice { const_index } } else { OpCode::ConstGet { const_index } };
+        self.push_op(op);
     }
     fn push_get_constant_ref_op(&mut self, val: VmValue) {
-        // if the const value is a fn that is not compiled yet, compile it!
         if let VmValue::Fn { slot } = val
         && self.compiled_functions.compiled_functions[slot].not_compiled() {
+            // if the const value is a fn that is not compiled yet, compile it!
 
             let closure_expr = self.compiled_functions.closure_expr_id[slot];
             let Expr::Closure { closure, .. } = self.ast.get_expr(closure_expr) else {
@@ -875,6 +903,15 @@ impl VmCompiler<'_> {
         let start_temps = self.cur_temp_amount;
         let pattern = self.ast.get_pattern(compile_pattern);
 
+        // a pattern like `x is 5` needs a pointer compare instead of a normal compare
+        let pointer_count = self.typed_ast.resolved_pattern_derefs.get(&compile_pattern)
+            .copied().unwrap_or_default();
+
+        for _ in 1..pointer_count {
+            self.push_op(OpCode::PointerGetClone);
+        }
+        let is_pointer_compare = pointer_count > 0;
+
         match pattern {
             Pattern::Wildcard => self.push_op(OpCode::ValuePop),
 
@@ -884,10 +921,7 @@ impl VmCompiler<'_> {
             }
 
             Pattern::Tuple(patterns) => {
-                // manually do stuff that self.push_op() does
-                // because OpCode::runtime_temp_effect can't know how many temps TupUnpack is gonna add.
-                self.push_op(OpCode::TupUnpack { length: patterns.len() });
-
+                self.push_op(if is_pointer_compare { OpCode::TupPointerUnpack { length: patterns.len() } } else { OpCode::TupUnpack { length: patterns.len() } });
                 for pattern in patterns.iter().rev() {
                     self.compile_binding_pattern(pattern.pattern, failure_jumps);
                 }
@@ -939,7 +973,7 @@ impl VmCompiler<'_> {
             // Failable patterns
             Pattern::CompareExpr(expr) => {
                 self.compile_expression(*expr);
-                self.push_op(OpCode::CmpEqual);
+                self.push_op(if is_pointer_compare { OpCode::CmpEqualPointer } else { OpCode::CmpEqual });
                 failure_jumps.push(FailureJump {
                     jump_loc: self.push_jump_if_false_op_for_patching(),
                     temps: self.cur_temp_amount
@@ -971,11 +1005,12 @@ impl VmCompiler<'_> {
             Pattern::EnumVariant { name: _, attached_tuple } => {
                 let (_enum_id, i) = self.typed_ast.resolved_enum_variant_pattern[&compile_pattern];
 
-                self.push_op(OpCode::TupUnpack { length: 2 });
+
+                self.push_op(if is_pointer_compare { OpCode::TupPointerUnpack { length: 2 } } else { OpCode::TupUnpack { length: 2 } });
 
                 // compare the enum tags
                 self.push_get_constant_op(VmValue::Int(i.try_into().unwrap()));
-                self.push_op(OpCode::CmpEqual);
+                self.push_op(if is_pointer_compare { OpCode::CmpEqualPointer } else { OpCode::CmpEqual });
                 failure_jumps.push(FailureJump {
                     jump_loc: self.push_jump_if_false_op_for_patching(),
                     temps: self.cur_temp_amount
@@ -991,15 +1026,19 @@ impl VmCompiler<'_> {
 
             Pattern::String { before, hole_parts } => {
                 if hole_parts.is_empty() {
-                    self.push_get_constant_op(VmValue::Str(before.clone()));
-                    self.push_op(OpCode::CmpEqual);
+                    self.push_get_constant_op(VmValue::OwnedStr(before.clone()));
+                    self.push_op(if is_pointer_compare { OpCode::CmpEqualPointer } else { OpCode::CmpEqual });
                     failure_jumps.push(FailureJump {
                         jump_loc: self.push_jump_if_false_op_for_patching(),
                         temps: self.cur_temp_amount
                     });
                 }
                 else {
-                    let before_id = self.add_constant(VmValue::Str(before.clone()));
+                    if is_pointer_compare {
+                        self.push_op(OpCode::PointerGetClone);
+                    }
+
+                    let before_id = self.add_constant(VmValue::OwnedStr(before.clone()));
                     self.push_op(OpCode::StrTrimPrefix { const_str: before_id });
                     failure_jumps.push(FailureJump {
                         jump_loc: self.push_jump_if_false_op_for_patching(),
@@ -1009,7 +1048,7 @@ impl VmCompiler<'_> {
                     for (i, (hole_pat, hole_after)) in hole_parts.iter().enumerate() {
                         let is_last_hole = i == hole_parts.len() - 1;
 
-                        let after_id = self.add_constant(VmValue::Str(hole_after.clone()));
+                        let after_id = self.add_constant(VmValue::OwnedStr(hole_after.clone()));
                         if is_last_hole {
                             self.push_op(OpCode::StrTrimSuffix { const_str: after_id });
                         } else {

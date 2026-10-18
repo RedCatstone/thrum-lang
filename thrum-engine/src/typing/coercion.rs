@@ -1,7 +1,5 @@
 use crate::{
-    ErrType, lexing::tokens::Span,
-    parsing::ast::ExprId,
-    typing::{Type, TypeChecker, TypeId, TypeVarId }
+    ErrType, lexing::tokens::Span, parsing::ast::ExprId, typing::{Lifetime, Type, TypeChecker, TypeId }
 };
 
 
@@ -56,8 +54,8 @@ impl TypeChecker<'_> {
     fn auto_deref_to_expected_type(&mut self, expr: ExprId, expected_id: TypeId) -> TypeId {
         let expr_type = self.typed_ast.get_expr_type(expr);
 
-        if let Some((expr_p_count, is_auto_clone_after)) = self.count_initial_pointers(expr_type)
-        && let Some((expected_p_count, _)) = self.count_initial_pointers(expected_id) {
+        if let Some((expr_p_count, is_auto_clone_after, _)) = self.count_initial_pointers(expr_type)
+        && let Some((expected_p_count, _, _)) = self.count_initial_pointers(expected_id) {
 
             // if we have more pointers than the expected_type, AND everything that needs to be derefed is auto_clone
             if expr_p_count > expected_p_count && (expected_p_count != 0 || is_auto_clone_after) {
@@ -70,17 +68,27 @@ impl TypeChecker<'_> {
         self.typed_ast.get_expr_type(expr)
     }
 
-    fn count_initial_pointers(&self, typ: TypeId) -> Option<(usize, bool)> {
+    pub(super) fn count_initial_pointers(&self, typ: TypeId) -> Option<(usize, bool, TypeId)> {
         let mut curr_typ = typ;
         let mut count = 0;
 
-        while let Type::Borrow { inner, .. } = self.prune_type_once(curr_typ) {
+        while let Some((inner, _)) = self.is_derefable_pointer(curr_typ) {
             curr_typ = inner;
             count += 1;
         }
 
+        // returns None on inference error
         self.is_auto_clone(curr_typ)
-            .map(|final_auto_clone| (count, final_auto_clone))
+            .map(|final_auto_clone| (count, final_auto_clone, curr_typ))
+    }
+
+    pub(super) fn is_derefable_pointer(&self, typ: TypeId) -> Option<(TypeId, Lifetime)> {
+        if let Type::Borrow { inner, mutable: _, lifetime } = self.prune_type_once(typ)
+        && let Some(false) = self.is_unsized(inner) {
+            Some((inner, lifetime))
+        } else {
+            None
+        }
     }
 
 
@@ -95,8 +103,10 @@ impl TypeChecker<'_> {
                 while self.deref_if_pointer(check_expr) { }
             }
             AutoDerefMode::LeaveOnePointer => {
-                while let Some((2.., _)) = self.count_initial_pointers(self.typed_ast.get_expr_type(check_expr)) {
-                    assert!(self.deref_if_pointer(check_expr));
+                if let Some((p_count, _, _)) = self.count_initial_pointers(self.typed_ast.get_expr_type(check_expr)) {
+                    for _ in 1..p_count {
+                        assert!(self.deref_if_pointer(check_expr));
+                    }
                 }
             }
         }
@@ -107,33 +117,33 @@ impl TypeChecker<'_> {
     pub(super) fn deref_if_pointer(&mut self, expr: ExprId) -> bool {
         let span = self.ast.get_expr_span(expr);
         let typ = self.typed_ast.get_expr_type(expr);
+        let typ = self.prune_id_once_infer_err(typ, span);
 
-        match self.prune_type_once_infer_err(typ, span) {
-            Type::Borrow { inner, mutable: _, borrows_var } => {
+        if let Some((inner, lifetime)) = self.is_derefable_pointer(typ) {
 
-                *self.typed_ast.auto_derefs.entry(expr).or_default() += 1;
-                self.typed_ast.expr_types[expr.0 as usize] = inner;
+            *self.typed_ast.auto_derefs.entry(expr).or_default() += 1;
+            self.typed_ast.expr_types[expr.0 as usize] = inner;
 
-                let auto_clone = self.check_deref_memory_rules(inner, borrows_var, span);
-                if !auto_clone {
-                    self.typed_ast.move_expr.insert(expr);
-                }
-                // println!("derefed: {:?}", self.ast.get_expr(expr));
-                true
+            let auto_clone = self.check_deref_memory_rules(inner, lifetime, span);
+            if !auto_clone {
+                self.typed_ast.move_expr.insert(expr);
             }
-            _ => false
+            // println!("derefed: {:?}", self.ast.get_expr(expr));
+            true
+        } else {
+            false
         }
     }
 
-    pub(super) fn check_deref_memory_rules(&mut self, inner: TypeId, borrows_var: Option<TypeVarId>, span: Span) -> bool {
+    pub(super) fn check_deref_memory_rules(&mut self, inner: TypeId, lifetime: Lifetime, span: Span) -> bool {
         if let Some(auto_clone) = self.is_auto_clone(inner) {
             if auto_clone {
-                if let Some(x) = borrows_var {
+                if let Lifetime::LocalVariable(x) = lifetime {
                     self.clone_variable(x, span);
                 }
             } else {
                 // if it isn't autoclone, it needs to move it
-                if let Some(x) = borrows_var {
+                if let Lifetime::LocalVariable(x) = lifetime {
                     self.move_variable(x, span);
                 }
                 else {
@@ -179,11 +189,20 @@ impl TypeChecker<'_> {
 
             Type::TupArr(inner, _)
             | Type::CustomType(_, inner)
-            | Type::EnumVariant { inner, .. } => {
-                self.is_auto_clone(inner)
-            }
+            | Type::EnumVariant { inner, .. } => self.is_auto_clone(inner),
 
             Type::Infer(_) => None
+        }
+    }
+
+    fn is_unsized(&self, typ: TypeId) -> Option<bool> {
+        match self.prune_type_once(typ) {
+            Type::Str => Some(true),
+            Type::CustomType(_, inner) => self.is_unsized(inner),
+
+            Type::Infer(_) => None,
+
+            _ => Some(false)
         }
     }
 }

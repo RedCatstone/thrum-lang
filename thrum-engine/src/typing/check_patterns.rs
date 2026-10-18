@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use crate::{
-    ErrType, parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId},
-    typing::{Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}},
+    ErrType,
+    parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId},
+    typing::{Lifetime, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}},
     vm_compiling::VmValue
 };
 
@@ -9,14 +10,21 @@ pub struct CheckPatternCtx<'ast, 'short> {
     expected_type: Option<TypeId>,
     explicit_type_anot: bool,
     has_value: bool,
+    can_bind_vars: bool,
     const_update: Option<&'short TypeVarConstVal>,
     vars_defined: &'short mut HashMap<&'ast str, TypeVarId>,
     or_pattern_expects_vars: Option<&'short HashMap<&'ast str, TypeVarId>>,
 }
 impl<'ast, 'short> CheckPatternCtx<'ast, 'short> {
-    pub const fn new(expected_type: Option<TypeId>, has_value: bool, vars_defined: &'short mut HashMap<&'ast str, TypeVarId>, const_update: Option<&'short TypeVarConstVal>) -> Self {
+    pub const fn new(
+        expected_type: Option<TypeId>,
+        has_value: bool,
+        can_bind_vars: bool,
+        vars_defined: &'short mut HashMap<&'ast str, TypeVarId>,
+        const_update: Option<&'short TypeVarConstVal>
+    ) -> Self {
         CheckPatternCtx {
-            expected_type, has_value, const_update, vars_defined,
+            expected_type, has_value, can_bind_vars, const_update, vars_defined,
             explicit_type_anot: false,
             or_pattern_expects_vars: None
         }
@@ -87,15 +95,25 @@ impl<'ast> TypeChecker<'ast> {
             }
 
             Pattern::Tuple(elems) => {
+                let (pointer_count, base_expected) = self.unwrap_and_record_pattern_derefs(pattern, ctx.expected_type);
+
                 let mut tuple_types = Vec::new();
                 let mut tuple_covered_cases = Vec::new();
 
-                let pruned_expected = ctx.expected_type.map(|t| self.prune_type_once(t));
+                let pruned_expected = base_expected.map(|t| self.prune_type_once(t));
 
                 for AstTuplePattern { label, pattern: p } in elems {
                     let elem_expected_type = match &pruned_expected {
                         Some(tup_type @ (Type::Tup(_) | Type::TupArr(_, _))) => {
-                            Self::extract_tup_label_type(tup_type, label).map(|(_, typ)| typ)
+                            Self::extract_tup_label_type(tup_type, label)
+
+                                // if the pattern was a ref to a tuple, make refs to all elements
+                                .map(|(_, typ)| if pointer_count > 0 {
+                                        let lifetime = self.new_infer_lifetime();
+                                        self.type_arena.add_type(Type::Borrow { inner: typ, mutable: false, lifetime })
+                                    } else {
+                                        typ
+                                    })
                         }
                         _ => None
                     };
@@ -107,21 +125,47 @@ impl<'ast> TypeChecker<'ast> {
 
                 covered_cases = PatternSpace::tuple_cartesian_product(&tuple_covered_cases);
 
-                self.type_arena.add_type(Type::Tup(tuple_types))
+                if let Some(base) = base_expected {
+                    let elems = tuple_types.iter().map(|tt| {
+                            let typ = if let Some((_, _, elem_base)) = self.count_initial_pointers(tt.typ) {
+                                elem_base
+                            } else {
+                                self.error(ErrType::TyperTypeMustBeKnownHere { typ: self.fmt_type(tt.typ) }, span)
+                            };
+
+                            TypeTuple { label: tt.label.clone(), typ }
+                        }).collect();
+
+                    let unborrowed_tuple = self.type_arena.add_type(Type::Tup(elems));
+                    self.unify_types(base, unborrowed_tuple, span, UnifyMode::Subtype);
+                }
+
+                if pointer_count > 0 {
+                    ctx.expected_type.expect("if pointer_count exists, then ctx.expected_type should exist.")
+                } else {
+                    self.type_arena.add_type(Type::Tup(tuple_types))
+                }
             }
 
             Pattern::String { before: _, hole_parts } => {
+                let str_slice_type = self.type_arena.get_static_str_borrow();
+
+                let (_, base_expected) = self.unwrap_and_record_pattern_derefs(pattern, ctx.expected_type);
+                if let Some(base) = base_expected {
+                    self.unify_types(base, str_slice_type, span, UnifyMode::Subtype);
+                }
+
                 // INVALID: "...{_}{_}..."
                 // VALID: "...{_} {_}..."
                 // VALID: "...{_}..."
                 for (i, (hole_pat, after)) in hole_parts.iter().enumerate() {
-                    self.check_match_pattern(*hole_pat, ctx.with_expected(Some(TypeId::STR)));
+                    self.check_match_pattern(*hole_pat, ctx.with_expected(Some(str_slice_type)));
 
                     if i != hole_parts.len() - 1 && after.is_empty() {
                         self.error(ErrType::TyperPatternStringHolesInARow, span);
                     }
                 }
-                TypeId::STR
+                ctx.expected_type.unwrap_or(str_slice_type)
             }
 
             Pattern::Wildcard => {
@@ -185,7 +229,11 @@ impl<'ast> TypeChecker<'ast> {
 
             Pattern::Conditional { pattern: p, cond } => {
                 let (typ, _) = self.check_match_pattern(*p, ctx.reborrow());
-                self.check_expression(*cond, &mut false, CheckExprCtx::default().expect(TypeId::BOOL));
+
+                let cond_ctx = CheckExprCtx::default()
+                    .expect(TypeId::BOOL)
+                    .allow_is_bindings(ctx.can_bind_vars);
+                self.check_expression(*cond, &mut false, cond_ctx);
 
                 typ
                 // missing cases defaults to NotCovered here, which is correct
@@ -197,13 +245,19 @@ impl<'ast> TypeChecker<'ast> {
                 match self.prune_type_once_infer_err(meta_id, span) {
                     Type::CustomType(_, inner_new_type) => {
 
+                        // because NewType's don't actually exist in the VM, this pattern can keep all pointers
+                        // `let NewInt{ inner } = x`  if x was type `&&&NewInt`, inner is type `&&&int`
+                        let elem_expected_type = ctx.expected_type.map(|expected| {
+                            self.replace_borrow_inner_recursive(expected, inner_new_type)
+                        });
+
                         match self.prune_type_once_infer_err(inner_new_type, span) {
                             Type::Error => TypeId::ERROR,
                             Type::Tup(_) | Type::TupArr(_, _) => {
                                 // if it expects a tuple, e.g. `type Point = { num, num }`
                                 // then just typecheck normally. (`data` is already a tuple expr)
                                 let (typ, covered) = self.check_match_pattern(
-                                    *data, ctx.with_expected(Some(inner_new_type))
+                                    *data, ctx.with_expected(elem_expected_type)
                                 );
                                 covered_cases = covered;
                                 typ
@@ -216,7 +270,7 @@ impl<'ast> TypeChecker<'ast> {
                                 if let [first] = elems.as_slice() && first.label == "0" {
                                     self.typed_ast.resolved_type_destruction_not_a_tuple.insert(pattern);
                                     let (typ, covered) = self.check_match_pattern(
-                                        first.pattern, ctx.with_expected(Some(inner_new_type))
+                                        first.pattern, ctx.with_expected(elem_expected_type)
                                     );
                                     covered_cases = covered;
                                     typ
@@ -228,7 +282,7 @@ impl<'ast> TypeChecker<'ast> {
                         };
 
                         // `N{ 2 }` returns the type `N`
-                        meta_id
+                        ctx.expected_type.unwrap_or(meta_id)
                     }
                     Type::Error => TypeId::ERROR,
                     _ => self.error(ErrType::TyperMustBeCustomtypeType { typ: self.fmt_type(meta_id) }, self.ast.get_expr_span(*typ))
@@ -236,11 +290,13 @@ impl<'ast> TypeChecker<'ast> {
             }
 
             Pattern::EnumVariant { name, attached_tuple } => {
+                let (pointer_count, base_expected) = self.unwrap_and_record_pattern_derefs(pattern, ctx.expected_type);
+
                 let mut expected_refined_enum = false;
 
                 // using `.Variant` syntax requires that the Typechecker knows the Enumtype.
                 let resolved_variant =
-                    if let Some(expected) = ctx.expected_type
+                    if let Some(expected) = base_expected
                     && let Type::EnumVariant { inner, variant } = self.prune_type_once(expected) {
                         // its a hard refined enum
                         // e.g. `let .Some{ inner } = Option.Some{ 123 }`
@@ -257,7 +313,7 @@ impl<'ast> TypeChecker<'ast> {
                         Some((enum_id, variant, attached_type, expected))
                     }
                     else {
-                        self.check_enum_variant(name, ctx.expected_type, Some(span))
+                        self.check_enum_variant(name, base_expected, Some(span))
                     };
 
 
@@ -265,7 +321,13 @@ impl<'ast> TypeChecker<'ast> {
                     // now that we found a variant, handle the inner data
 
                     let inner_covered = if let Some(tup) = attached_tuple {
-                        self.check_match_pattern(*tup, ctx.with_expected(Some(attached_type))).1
+                        let elem_expected_type = if pointer_count > 0 {
+                            let lifetime = self.new_infer_lifetime();
+                            self.type_arena.add_type(Type::Borrow { inner: attached_type, mutable: false, lifetime })
+                        } else {
+                            attached_type
+                        };
+                        self.check_match_pattern(*tup, ctx.with_expected(Some(elem_expected_type))).1
                     } else {
                         self.unify_types(TypeId::VOID, attached_type, span, UnifyMode::Subtype);
                         vec![PatternSpace::All]
@@ -278,14 +340,21 @@ impl<'ast> TypeChecker<'ast> {
                         }
                     }
                     self.typed_ast.resolved_enum_variant_pattern.insert(pattern,(enum_id,variant_index));
-                    final_type
+
+                    if pointer_count > 0 {
+                        ctx.expected_type.unwrap()
+                    } else {
+                        final_type
+                    }
                 } else {
                     TypeId::ERROR
                 }
             }
 
             Pattern::CompareExpr(expr) => {
-                let expr_type = self.check_expression(*expr, &mut false, CheckExprCtx::default());
+                let (_, base_expected) = self.unwrap_and_record_pattern_derefs(pattern, ctx.expected_type);
+
+                let expr_type = self.check_expression(*expr, &mut false, CheckExprCtx::default().maybe_expect(base_expected));
 
                 // if there the compare expr is a simple literal, or a const value
                 // then add that to covered_cases
@@ -304,7 +373,7 @@ impl<'ast> TypeChecker<'ast> {
                     _ => {}
                 }
 
-                expr_type
+                ctx.expected_type.unwrap_or(expr_type)
             }
 
             Pattern::PlacePointer(expr) => {
@@ -314,8 +383,8 @@ impl<'ast> TypeChecker<'ast> {
                 // expr was already typechecked in `get_pattern_type`
                 let expr_type = self.typed_ast.get_expr_type(*expr);
                 match self.prune_type_once(expr_type) {
-                    Type::Borrow { inner, mutable: true, borrows_var } => {
-                        if let Some(x) = borrows_var {
+                    Type::Borrow { inner, mutable: true, lifetime } => {
+                        if let Lifetime::LocalVariable(x) = lifetime {
                             self.update_variable(x, span);
                         }
                         inner
@@ -348,6 +417,16 @@ impl<'ast> TypeChecker<'ast> {
 
 
 
+    fn unwrap_and_record_pattern_derefs(&mut self, pattern: PatternId, expected: Option<TypeId>) -> (usize, Option<TypeId>) {
+        let (pointer_count, base_expected) = match expected.and_then(|e| self.count_initial_pointers(e)) {
+            Some((count, _, base)) => (count, Some(base)),
+            None => (0, expected),
+        };
+        self.typed_ast.resolved_pattern_derefs.insert(pattern, pointer_count);
+        (pointer_count, base_expected)
+    }
+
+
     pub(super) fn check_annotation_meta_type_id(&mut self, expr: ExprId, needs_typechecking: bool) -> TypeId {
         if needs_typechecking {
             self.check_expression(expr, &mut false, CheckExprCtx::default().expect(TypeId::TYPE).is_const());
@@ -372,25 +451,34 @@ impl<'ast> TypeChecker<'ast> {
                 let span = self.ast.get_expr_span(*expr);
 
                 Some(match self.prune_type_once_infer_err(expr_type, span) {
-                    Type::Borrow { inner, mutable: true, borrows_var: _ } => {
+                    Type::Borrow { inner, mutable: true, lifetime: _ } => {
                         inner
                     }
                     Type::Error => TypeId::ERROR,
                     _ => {
-                        let err_borrow = self.type_arena.add_type(Type::Borrow { inner: TypeId::ERROR, mutable: true, borrows_var: None });
+                        let err_borrow = self.type_arena.add_type(Type::Borrow { inner: TypeId::ERROR, mutable: true, lifetime: Lifetime::Static });
                         self.type_mismatch(err_borrow, expr_type, span)
                     }
                 })
             }
             Pattern::Tuple(elems) => {
+                let mut any_explicit = false;
                 let type_elems = elems.iter()
                     .map(|elem| {
-                        let elem_type = self.get_pattern_type(elem.pattern).unwrap_or_else(|| self.new_infer_type());
+                        let elem_type = self.get_pattern_type(elem.pattern).map_or_else(|| self.new_infer_type(), |x| {
+                                any_explicit = true;
+                                x
+                            });
                         TypeTuple { label: elem.label.clone(), typ: elem_type }
                     })
                     .collect();
 
-                Some(self.type_arena.add_type(Type::Tup(type_elems)))
+                // this is not a perfect change, but it works for now
+                if any_explicit {
+                    Some(self.type_arena.add_type(Type::Tup(type_elems)))
+                } else {
+                    None
+                }
             }
             _ => None,
         }
