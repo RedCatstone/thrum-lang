@@ -657,7 +657,7 @@ impl Parser<'_> {
             ));
             self.add_expr(start, Expr::Tuple { elems: tuple_body })
         }
-        else if maybe_just_grouped_expr {
+        else if maybe_just_grouped_expr && first_elem.label == "0" {
             self.expect_token(end_token, "to close the grouped expression");
             first_elem.expr
         } else {

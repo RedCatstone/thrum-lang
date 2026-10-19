@@ -118,6 +118,11 @@ mod common;
 // Tuple, String, Enum Patterns
 // =========================================================================
 #[test] fn tuple_exact_match() {
+    test!("(2,) is (2,)", VmValue::Bool(true));
+    test!("(2, 1) is (2, 1)", VmValue::Bool(true));
+    test!("(x: 2) is (x: 2)", VmValue::Bool(true));
+    test!("(x: 2, y: 3) is (x: 2, y: 3)", VmValue::Bool(true));
+
     test!("(1, 2) is (1, 1) | (1, 2) | (1, 3)", VmValue::Bool(true));
     test!("(1, 2) is (1, 1) | (1, 3)", VmValue::Bool(false));
 

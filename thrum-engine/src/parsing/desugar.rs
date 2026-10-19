@@ -49,7 +49,7 @@ pub fn desugar_after_parsing(ast: &mut AstArena) {
                         expr!(span, Expr::Assign {
                             extra_op: None,
                             op_span: span,
-                            pattern: pattern!(span, Pattern::Binding { name: "i".into(), mutable: true }),
+                            pattern: pattern!(span, Pattern::Binding { name: "$iter".into(), mutable: true }),
                             value: expr!(span, Expr::Call {
                                 callee: expr!(span, Expr::MemberAccess {
                                     left: iter_expr,
@@ -64,7 +64,7 @@ pub fn desugar_after_parsing(ast: &mut AstArena) {
                             condition: expr!(span, Expr::Is {
                                 value: expr!(span, Expr::Call {
                                     callee: expr!(span, Expr::MemberAccess {
-                                        left: expr!(span, Expr::IdentifierRef { name: "i".into(), mutable: true }),
+                                        left: expr!(span, Expr::IdentifierRef { name: "$iter".into(), mutable: true }),
                                         member: "next".into()
                                     }),
                                     arguments: Vec::new()

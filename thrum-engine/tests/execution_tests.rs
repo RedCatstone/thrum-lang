@@ -190,6 +190,11 @@ mod common;
     test!("let mut sum = 0; for x in 10..=10 => sum = x^; sum^", VmValue::Int(10));
 }
 
+#[test] fn tuples() {
+    test!("(x: 10).x", VmValue::Int(10));
+    test!("(x: 10,).x", VmValue::Int(10));
+}
+
 #[test] fn tup_arrays() {
     test!("
         let x = (1, 2, 3)

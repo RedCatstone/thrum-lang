@@ -189,7 +189,7 @@ impl Parser<'_> {
             ));
             self.add_pattern(start, Pattern::Tuple(tuple_body))
         }
-        else if maybe_just_grouped_expr {
+        else if maybe_just_grouped_expr && first_elem.label == "0" {
             self.expect_token(end_token, "to close the grouped pattern");
             first_elem.pattern
         } else {
