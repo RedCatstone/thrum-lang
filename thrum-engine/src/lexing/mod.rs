@@ -293,6 +293,9 @@ pub fn lex_num_int_from(source_frag: &str) -> i64 {
 #[must_use]
 pub fn lex_num_float_from(source_frag: &str) -> f64 {
     source_frag
+        .chars()
+        .filter(|&c| c != '_')
+        .collect::<String>()
         .parse()
         .unwrap_or_else(|x| unreachable!("{source_frag:?} {x}"))
 }

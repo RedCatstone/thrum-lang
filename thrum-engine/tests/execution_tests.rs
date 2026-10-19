@@ -2,6 +2,12 @@ use thrum_engine::{ErrType, vm_compiling::VmValue};
 mod common;
 
 
+#[test] fn numbers() {
+    test!("1_000", VmValue::Int(1000));
+    test!("1____0", VmValue::Int(10));
+    test!("1____", VmValue::Int(1));
+    test!("1____.5__", VmValue::Float(1.5));
+}
 
 #[test] fn math() {
     test!("1+2 * 3", VmValue::Int(7));
@@ -106,7 +112,6 @@ mod common;
 #[test] fn unicode_lexing() {
     test!("
         let ê = 3 // 🦀
-
         ê^
     ", VmValue::Int(3));
 }
