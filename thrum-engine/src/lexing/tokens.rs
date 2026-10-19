@@ -98,7 +98,7 @@ pub enum AssignOp {
 }
 
 impl TokenKind {
-    pub const PUNCTUATION: &[(&'static str, Self)] = &[
+    pub const PUNCTUATION: &[(&str, Self)] = &[
         // Longer tokens need to go first otherwise it picks '-' over '->'
 
         // Basic
@@ -134,7 +134,7 @@ impl TokenKind {
         (">=", Self::GreaterEqual), (">", Self::Greater),
     ];
 
-    pub const KEYWORDS: &[(&'static str, Self)] = &[
+    pub const KEYWORDS: &[(&str, Self)] = &[
         // Keywords
         ("and", Self::And), ("or", Self::Or),
         ("if", Self::If), ("else", Self::Else), ("ensure", Self::Ensure),

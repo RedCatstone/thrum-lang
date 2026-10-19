@@ -53,10 +53,6 @@ impl Lexer<'_> {
                 return
             };
 
-            // comments
-            if remaining.starts_with("//") { self.skip_comment("\n"); continue }
-            if remaining.starts_with("/*") { self.skip_comment("*/"); continue }
-
             // check if the start of remaining matches any Punctuation token
             if let Some(&(s, kind)) = TokenKind::PUNCTUATION.iter().find(|(p, _)| remaining.starts_with(p)) {
                 if let Some(bl) = &mut brace_level {
@@ -83,7 +79,7 @@ impl Lexer<'_> {
                     if let Some(&(_, kind)) = TokenKind::KEYWORDS.iter().find(|(kw, _)| *kw == ident) {
                         self.add_token(kind);
                     } else {
-                        // the actual name will be gotten from the source code with the TokenSpan
+                        // the actual name in the parser will be gotten from the source code with the TokenSpan
                         self.add_token(TokenKind::Identifier);
                     }
                 }
@@ -122,9 +118,14 @@ impl Lexer<'_> {
     }
 
     fn skip_comment(&mut self, end_str: &str) {
-        while self.byte_pos < self.source.len() {
+        loop {
             let remaining = &self.source[self.byte_pos..];
-            if remaining.starts_with('\n') {
+            let Some(first_char) = remaining.chars().next() else {
+                // remaining was empty => EndOfFile
+                break
+            };
+
+            if first_char == '\n' {
                 self.curr_line += 1;
                 self.line_start_lookup.push(self.byte_pos + 1);
             }
@@ -132,7 +133,7 @@ impl Lexer<'_> {
                 self.byte_pos += end_str.len();
                 break;
             }
-            self.byte_pos += 1;
+            self.byte_pos += first_char.len_utf8();
         }
         self.curr_token_start = self.byte_pos;
     }
@@ -153,13 +154,12 @@ impl Lexer<'_> {
     fn eat_identifier(&mut self) -> &str {
         let start_byte = self.byte_pos;
 
-        for c in self.source[self.byte_pos..].chars() {
-            if c.is_alphanumeric() || c == '_' {
-                self.byte_pos += c.len_utf8();
-            } else {
-                break;
-            }
-        }
+        self.byte_pos += self.source[start_byte..]
+            .chars()
+            .take_while(|&c| c.is_alphanumeric() || c == '_')
+            .map(char::len_utf8)
+            .sum::<usize>();
+
         &self.source[start_byte..self.byte_pos]
     }
 

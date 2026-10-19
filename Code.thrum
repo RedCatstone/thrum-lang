@@ -1,5 +1,3 @@
 // run me by doing `cargo run Code.thrum`
 
-5 is let x
-and 10 is let z
-and 100 is let y
+"ê".len() // 🦀

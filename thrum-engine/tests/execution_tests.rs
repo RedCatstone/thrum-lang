@@ -103,6 +103,14 @@ mod common;
     ", VmValue::Int(20));
 }
 
+#[test] fn unicode_lexing() {
+    test!("
+        let ê = 3 // 🦀
+
+        ê^
+    ", VmValue::Int(3));
+}
+
 #[test] fn loop_shenanigance() {
     test!("
         let mut i = 0
@@ -202,6 +210,10 @@ mod common;
         let arr = (s, "x")
         arr[0]^
     "#, VmValue::OwnedStr("klaus".to_string()));
+
+    test!(r#"  "abcd".len()  "#, VmValue::Int(4));
+    test!(r#"  "🦀".len()  "#, VmValue::Int(4));
+    test!(r#"  "ê".len()  "#, VmValue::Int(2));
 
     // TODO: str templates without the heap
     // test!(r#"
