@@ -112,7 +112,6 @@ impl TokenKind {
         ("|", Self::Pipe),
         ("->", Self::MinusArrow), ("=>", Self::EqualArrow),
         ("^", Self::Caret),
-        ("?", Self::Quest),
         ("#", Self::Hashtag),
         ("...", Self::DotDotDot),
         ("..=", Self::DotDotEqual), ("..", Self::DotDot),
@@ -126,6 +125,7 @@ impl TokenKind {
         ("/=", Self::Assign { extra_op: Some(AssignOp::Slash) }), ("/", Self::Op(AssignOp::Slash)),
         ("%=", Self::Assign { extra_op: Some(AssignOp::Percent) }), ("%", Self::Op(AssignOp::Percent)),
         ("??=", Self::Assign { extra_op: Some(AssignOp::QuestQuest) }), ("??", Self::Op(AssignOp::QuestQuest)),
+        ("?", Self::Quest),
 
         // Logical
         ("==", Self::EqualEqual), ("=", Self::Assign { extra_op: None }),

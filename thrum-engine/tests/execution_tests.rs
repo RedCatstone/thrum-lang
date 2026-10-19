@@ -7,6 +7,7 @@ mod common;
     test!("1____0", VmValue::Int(10));
     test!("1____", VmValue::Int(1));
     test!("1____.5__", VmValue::Float(1.5));
+    test!("9999999999999999999", VmValue::Int(i64::MAX));
 }
 
 #[test] fn math() {
@@ -105,8 +106,10 @@ mod common;
         */
         + /* weee * / */ 2
         // + 16
-        + 3
+        + 3  // - 2
     ", VmValue::Int(20));
+
+    test_err!("/*", ErrType::LexerUnterminatedMultilineComment);
 }
 
 #[test] fn unicode_lexing() {

@@ -58,6 +58,8 @@ pub enum ErrType {
     LexerUnexpectedCharacter { c: char },
     #[display("Unterminated string.")]
     LexerUnterminatedString,
+    #[display("Unterminated multi-line comment.")]
+    LexerUnterminatedMultilineComment,
     #[display("Missing closing brace in template string.")]
     LexerMissingClosingStringBrace,
 

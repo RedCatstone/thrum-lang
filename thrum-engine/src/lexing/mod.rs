@@ -29,12 +29,12 @@ impl Lexer<'_> {
     }
 
     #[track_caller]
-    fn error(&mut self, err_type: ErrType) {
+    fn error(&mut self, err_type: ErrType, length: usize) {
         self.err_data.errors.push(ProgramError {
             span: Span {
                 line: self.curr_line,
                 byte_offset: self.byte_pos,
-                length: self.byte_pos - self.curr_token_start + 1
+                length
             },
             err_type,
             compiler_location: std::panic::Location::caller()
@@ -91,7 +91,7 @@ impl Lexer<'_> {
                 '0'..='9' => self.eat_number(),
 
                 c => {
-                    self.error(ErrType::LexerUnexpectedCharacter { c });
+                    self.error(ErrType::LexerUnexpectedCharacter { c }, c.len_utf8());
                     self.byte_pos += c.len_utf8();
                 }
             }
@@ -107,8 +107,7 @@ impl Lexer<'_> {
             }
             else if remaining.starts_with('\n') {
                 self.byte_pos += 1;
-                self.curr_line += 1;
-                self.line_start_lookup.push(self.byte_pos);
+                self.add_new_line();
             }
             else if remaining.starts_with("//") { self.skip_comment("\n"); }
             else if remaining.starts_with("/*") { self.skip_comment("*/"); }
@@ -122,20 +121,30 @@ impl Lexer<'_> {
             let remaining = &self.source[self.byte_pos..];
             let Some(first_char) = remaining.chars().next() else {
                 // remaining was empty => EndOfFile
+                if end_str == "*/" {
+                    self.error(ErrType::LexerUnterminatedMultilineComment, 0);
+                }
                 break
             };
 
             if first_char == '\n' {
-                self.curr_line += 1;
-                self.line_start_lookup.push(self.byte_pos + 1);
+                self.byte_pos += 1;
+                self.add_new_line();
+                self.byte_pos -= 1;
             }
             if remaining.starts_with(end_str) {
                 self.byte_pos += end_str.len();
                 break;
             }
+
             self.byte_pos += first_char.len_utf8();
         }
         self.curr_token_start = self.byte_pos;
+    }
+
+    fn add_new_line(&mut self) {
+        self.curr_line += 1;
+        self.line_start_lookup.push(self.byte_pos);
     }
 
     fn add_token(&mut self, token_type: TokenKind) {
@@ -206,19 +215,23 @@ impl Lexer<'_> {
                             self.add_token(TokenKind::RightBrace);
                             self.curr_token_start = self.byte_pos;  // set the token_start right after '}'
                         }
-                        _ => return self.error(ErrType::LexerMissingClosingStringBrace)
+                        _ => return self.error(ErrType::LexerMissingClosingStringBrace, 1)
                     }
                 }
                 b'\\' => {
                     is_backslashed = true;
                     self.byte_pos += 1;
                 }
+                b'\n' => {
+                    self.byte_pos += 1;
+                    self.add_new_line();
+                }
 
                 _ => self.byte_pos += 1,
             }
         }
 
-        self.error(ErrType::LexerUnterminatedString);
+        self.error(ErrType::LexerUnterminatedString, 0);
     }
 
 
@@ -286,7 +299,7 @@ pub fn lex_num_int_from(source_frag: &str) -> i64 {
         .chars()
         .filter(|&c| c != '_')
         .map(|x| x.to_digit(10).unwrap_or_else(|| unreachable!("Other characters should not exist in ints... {source_frag:?} {x}")))
-        .fold(0, |acc, digit| acc * 10 + i64::from(digit))
+        .fold(0, |acc, digit| acc.saturating_mul(10).saturating_add(i64::from(digit)))
 }
 
 
