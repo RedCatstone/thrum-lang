@@ -1,3 +1,6 @@
 // run me by doing `cargo run Code.thrum`
 
-(1: 2)
+"
+1\
+           2
+"

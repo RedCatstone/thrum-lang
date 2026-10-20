@@ -9,7 +9,6 @@ pub struct Lexer<'a> {
     tokens: Vec<TokenSpan>,
     line_start_lookup: Vec<usize>,
     byte_pos: usize,
-    curr_line: usize,
     curr_token_start: usize
 }
 
@@ -20,7 +19,6 @@ impl Lexer<'_> {
             tokens: Vec::new(),
             line_start_lookup: vec![0],
             byte_pos: 0,
-            curr_line: 1,
             curr_token_start: 0
         };
         lexer.tokenize(None);
@@ -32,7 +30,7 @@ impl Lexer<'_> {
     fn error(&mut self, err_type: ErrType, length: usize) {
         self.err_data.errors.push(ProgramError {
             span: Span {
-                line: self.curr_line,
+                line: self.line_start_lookup.len(),
                 byte_offset: self.byte_pos,
                 length
             },
@@ -107,7 +105,7 @@ impl Lexer<'_> {
             }
             else if remaining.starts_with('\n') {
                 self.byte_pos += 1;
-                self.add_new_line();
+                self.line_start_lookup.push(self.byte_pos);
             }
             else if remaining.starts_with("//") { self.skip_comment("\n"); }
             else if remaining.starts_with("/*") { self.skip_comment("*/"); }
@@ -128,9 +126,7 @@ impl Lexer<'_> {
             };
 
             if first_char == '\n' {
-                self.byte_pos += 1;
-                self.add_new_line();
-                self.byte_pos -= 1;
+                self.line_start_lookup.push(self.byte_pos + 1);
             }
             if remaining.starts_with(end_str) {
                 self.byte_pos += end_str.len();
@@ -142,16 +138,11 @@ impl Lexer<'_> {
         self.curr_token_start = self.byte_pos;
     }
 
-    fn add_new_line(&mut self) {
-        self.curr_line += 1;
-        self.line_start_lookup.push(self.byte_pos);
-    }
-
     fn add_token(&mut self, token_type: TokenKind) {
         let new_token = TokenSpan {
             token: token_type,
             span: Span {
-                line: self.curr_line,
+                line: self.line_start_lookup.len(),
                 byte_offset: self.curr_token_start,
                 length: self.byte_pos - self.curr_token_start,
             }
@@ -215,7 +206,7 @@ impl Lexer<'_> {
                             self.add_token(TokenKind::RightBrace);
                             self.curr_token_start = self.byte_pos;  // set the token_start right after '}'
                         }
-                        _ => return self.error(ErrType::LexerMissingClosingStringBrace, 1)
+                        _ => return self.error(ErrType::LexerMissingClosingStringBrace, 0)
                     }
                 }
                 b'\\' => {
@@ -224,7 +215,7 @@ impl Lexer<'_> {
                 }
                 b'\n' => {
                     self.byte_pos += 1;
-                    self.add_new_line();
+                    self.line_start_lookup.push(self.byte_pos);
                 }
 
                 _ => self.byte_pos += 1,
@@ -267,24 +258,28 @@ pub fn lex_string_from(source_frag: &str) -> String {
     let mut skip_spaces = false;
 
     for c in source_frag.chars() {
+        // just completely ignore \r
+        if let '\r' = c { continue }
+
+        if skip_spaces {
+            if let ' ' | '\t' = c { continue }
+            skip_spaces = false;
+        }
         if is_backslashed {
             match c {
                 'n' => s.push('\n'),
                 't' => s.push('\t'),
                 'r' => s.push('\r'),
                 '0' => s.push('\0'),
-                '\n' => {
-                    s.push('\n');
-                    skip_spaces = true;
-                }
+                '\n' => skip_spaces = true,
                 _ => s.push(c),
             }
             is_backslashed = false;
             continue
         }
-        if skip_spaces {
-            if let ' ' | '\r' | '\t' = c { continue }
-            skip_spaces = false;
+        if let '\\' = c {
+            is_backslashed = true;
+            continue
         }
         s.push(c);
     }

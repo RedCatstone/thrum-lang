@@ -10,6 +10,14 @@ mod common;
     test!("9999999999999999999", VmValue::Int(i64::MAX));
 }
 
+#[test] fn string_escaping() {
+    test!(r#"  "\n\n"  "#, VmValue::OwnedStr("\n\n".to_string()));
+    test!(r#"  "\n\t-\r \0"  "#, VmValue::OwnedStr("\n\t-\r \0".to_string()));
+    test!(r#"  "\:\_"  "#, VmValue::OwnedStr(":_".to_string()));
+    test!(r#"  "\
+                  a"  "#, VmValue::OwnedStr("a".to_string()));
+}
+
 #[test] fn math() {
     test!("1+2 * 3", VmValue::Int(7));
     test!("(1 + 2)*3", VmValue::Int(9));
