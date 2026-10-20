@@ -84,9 +84,6 @@ impl PartialOrd for VmValue {
             (Self::Void, Self::Void) | (Self::Empty, Self::Empty) => Some(std::cmp::Ordering::Equal),
             (Self::Type(l), Self::Type(r)) => l.partial_cmp(r),
 
-            // this case literally only exists for `cargo test`s
-            (Self::Slice(l), Self::OwnedStr(r)) => l.as_str().partial_cmp(r),
-
             _ => panic!("comparing {self:?} with {other:?} is not implemented...")
         }
     }
@@ -99,6 +96,18 @@ impl From<AstValue> for VmValue {
             AstValue::NumFloat(v) => Self::Float(v),
             AstValue::Str(v) => Self::OwnedStr(v),
             AstValue::Bool(v) => Self::Bool(v),
+        }
+    }
+}
+
+impl VmValue {
+    /// temporary fix for returning pointers pointing into the vm
+    #[must_use] pub fn to_owned_value(&self) -> Self {
+        match self {
+            Self::Slice(slice) => Self::OwnedStr(slice.as_str().to_string()),
+            Self::Tup(elems) => Self::Tup(elems.iter().map(Self::to_owned_value).collect()),
+            Self::ValuePointer(p) => unsafe { &**p }.to_owned_value(),
+            _ => self.clone(),
         }
     }
 }
