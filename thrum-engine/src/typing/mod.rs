@@ -1,7 +1,10 @@
 use std::{collections::{HashMap, HashSet}, fmt::{self, Write}};
 
 use crate::{
-    ErrType, ProgramError, ProgramErrorData, WarnType, lexing::tokens::Span, nativelib::get_native_lib, parsing::ast::{AstArena, AstIds, ExprId, PatternId}, typing::{check_expressions::CheckExprCtx, type_vars::{SnapshotVarsState, TypeVar, TypeVarIsUsed, TypeVarScope}}, vm_compiling::{FunctionRegistry, NumMode, VmValue}
+    ErrType, ProgramError, ProgramErrorData, WarnType, lexing::tokens::Span, nativelib::get_native_lib,
+    parsing::ast::{AstArena, AstIds, ExprId, PatternId},
+    typing::{check_expressions::CheckExprCtx, type_vars::{SnapshotVarsState, TypeVar, TypeVarIsUsed, TypeVarScope}},
+    vm_compiling::{FunctionRegistry, NumMode, VmValue}
 };
 
 pub mod type_vars;
@@ -32,8 +35,8 @@ pub enum Type {
 
     CustomType(CustomTypeId, TypeId),
 
-    Tup(Vec<TypeTuple>),
-    TupArr(TypeId, usize),
+    Tup(TupMode),
+    Slice(TypeId),
 
     Fn { param_types: Vec<TypeId>, return_type: TypeId },
 
@@ -43,6 +46,41 @@ pub enum Type {
     Error,
 }
 
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub enum TupMode {
+    Tup(Vec<TypeTuple>),
+    Arr(TypeId, usize)
+}
+
+impl TupMode {
+    fn extract_label_type(&self, label: &str) -> Option<(usize, TypeId)> {
+        match self {
+            Self::Tup(elems) => elems.iter().enumerate()
+                .find(|(_, elem)| elem.label == *label)
+                .map(|(index, t)| (index, t.typ)),
+
+            Self::Arr(elem, len) => label.parse().map_or(
+                None,
+                |i| (i < *len).then_some((i, *elem))
+            )
+        }
+    }
+
+    const fn len(&self) -> usize {
+        match self {
+            Self::Tup(inners) => inners.len(),
+            Self::Arr(_, len) => *len
+        }
+    }
+
+    fn get(&self, index: usize) -> (Option<&str>, TypeId) {
+        match self {
+            Self::Tup(elems) => (Some(&elems[index].label), elems[index].typ),
+            Self::Arr(inner, _) => (None, *inner),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct TypeTuple {
@@ -143,6 +181,7 @@ pub struct TypedAst {
 
     pub resolved_tuple_arr_length: HashMap<ExprId, usize>,
     pub resolved_tuple_type_coerce: HashMap<ExprId, Box<[String]>>,
+    pub resolved_tuple_slice_coerce: HashMap<ExprId, usize>,
     pub resolved_enum_variant: HashMap<ExprId, (EnumId, usize)>,
     pub resolved_enum_variant_pattern: HashMap<PatternId, (EnumId, usize)>,
     pub resolved_closure_fn_id: HashMap<ExprId, usize>,
@@ -369,45 +408,44 @@ impl TypeChecker<'_> {
 
             (Type::Error, _) | (_, Type::Error) => TypeId::ERROR,
 
-            (Type::TupArr(inner_a, len_a), Type::TupArr(inner_b, len_b)) if len_a == len_b => {
-                let merged = self.unify_types(inner_a, inner_b, span, mode);
-                self.type_arena.add_type(Type::TupArr(merged, len_a))
-            }
+            (Type::Tup(mode_a), Type::Tup(mode_b))
+            if let len = mode_a.len() && len == mode_b.len() => {
 
-            (Type::Tup(elems_a), Type::Tup(elems_b)) if elems_a.len() == elems_b.len() => {
-                let mut new_elems = Vec::new();
+                if let (&TupMode::Arr(inner_a, _), &TupMode::Arr(inner_b, _)) = (&mode_a, &mode_b) {
+                    let merged = self.unify_types(inner_a, inner_b, span, mode);
+                    self.type_arena.add_type(Type::Tup(TupMode::Arr(merged, len)))
+                }
+                else {
+                    let mut new_elems = Vec::with_capacity(len);
 
-                for (ia, ib) in elems_a.into_iter().zip(elems_b) {
-                    if ia.label != ib.label {
-                        *mismatch = true;
+                    for i in 0..len {
+                        let (label_a, typ_a) = mode_a.get(i);
+                        let (label_b, typ_b) = mode_b.get(i);
+
+                        new_elems.push(TypeTuple {
+                            typ: self.unify_types(typ_a, typ_b, span, mode),
+                            label: match (label_a, label_b) {
+                                (Some(a), Some(b)) => {
+                                    if a != b {
+                                        *mismatch = true;
+                                    }
+                                    a.to_string()
+                                }
+                                (Some(a), None) => a.to_string(),
+                                (None, Some(b)) => b.to_string(),
+                                (None, None) => i.to_string(),
+                            }
+                        });
                     }
 
-                    let id = self.unify_types(ia.typ, ib.typ, span, mode);
-                    new_elems.push(TypeTuple { label: ia.label, typ: id });
+                    self.type_arena.add_type(Type::Tup(TupMode::Tup(new_elems)))
                 }
-
-                self.type_arena.add_type(Type::Tup(new_elems))
             }
 
-            (Type::TupArr(inner_a, len_a), Type::Tup(elems_b)) if len_a == elems_b.len() => {
-                let new_elems = elems_b.into_iter()
-                    .map(|elem_a| TypeTuple {
-                        label: elem_a.label,
-                        typ: self.unify_types(elem_a.typ, inner_a, span, mode)
-                    })
-                    .collect();
 
-                self.type_arena.add_type(Type::Tup(new_elems))
-            }
-            (Type::Tup(elems_a), Type::TupArr(inner_b, len_b)) if elems_a.len() == len_b => {
-                let new_elems = elems_a.into_iter()
-                    .map(|elem_a| TypeTuple {
-                        label: elem_a.label,
-                        typ: self.unify_types(elem_a.typ, inner_b, span, mode)
-                    })
-                    .collect();
-
-                self.type_arena.add_type(Type::Tup(new_elems))
+            (Type::Slice(inner_a), Type::Slice(inner_b)) => {
+                let merged = self.unify_types(inner_a, inner_b, span, mode);
+                self.type_arena.add_type(Type::Slice(merged))
             }
 
 
@@ -558,7 +596,7 @@ impl TypeChecker<'_> {
                 write!(s, ".{}", variants[variant_index].0)
             }
 
-            Type::Tup(elems) => {
+            Type::Tup(TupMode::Tup(elems)) => {
                 write!(s, "tup<")?;
                 for (i, elem) in elems.into_iter().enumerate() {
                     if i > 0 { write!(s, ", ")?; }
@@ -571,11 +609,16 @@ impl TypeChecker<'_> {
                 }
                 write!(s, ">")
             }
-
-            Type::TupArr(inner, length) => {
-                write!(s, "tupArr<")?;
+            Type::Tup(TupMode::Arr(inner, length)) => {
+                write!(s, "tup<")?;
                 self.write_type(inner, s)?;
                 write!(s, "; {length}>")
+            }
+
+            Type::Slice(inner) => {
+                write!(s, "[")?;
+                self.write_type(inner, s)?;
+                write!(s, "]")
             }
 
             Type::Fn { param_types, return_type } => {
@@ -701,13 +744,17 @@ impl TypeChecker<'_> {
                 let inner = trans(self, inner);
                 self.type_arena.add_type(Type::CustomType(custom_id, inner))
             }
-            Type::Tup(elems) => {
+            Type::Tup(TupMode::Tup(elems)) => {
                 let elems = elems.into_iter().map(|e| TypeTuple { label: e.label, typ: trans(self, e.typ) }).collect();
-                self.type_arena.add_type(Type::Tup(elems))
+                self.type_arena.add_type(Type::Tup(TupMode::Tup(elems)))
             }
-            Type::TupArr(typ, len) => {
+            Type::Tup(TupMode::Arr(typ, len)) => {
                 let typ = trans(self, typ);
-                self.type_arena.add_type(Type::TupArr(typ, len))
+                self.type_arena.add_type(Type::Tup(TupMode::Arr(typ, len)))
+            }
+            Type::Slice(typ) => {
+                let typ = trans(self, typ);
+                self.type_arena.add_type(Type::Slice(typ))
             }
             Type::Borrow { inner, mutable, lifetime } => {
                 let inner = trans(self, inner);

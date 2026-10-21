@@ -1,9 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use crate::{
-    ErrType,
-    parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId},
-    typing::{Lifetime, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}},
-    vm_compiling::VmValue
+    ErrType, parsing::ast::{AstTuplePattern, AstValue, Expr, ExprId, Pattern, PatternId}, typing::{Lifetime, TupMode, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_expressions::CheckExprCtx, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, TypeVarConstVal}}, vm_compiling::VmValue
 };
 
 pub struct CheckPatternCtx<'ast, 'short> {
@@ -104,9 +101,9 @@ impl<'ast> TypeChecker<'ast> {
 
                 for AstTuplePattern { label, pattern: p } in elems {
                     let elem_expected_type = match &pruned_expected {
-                        Some(tup_type @ (Type::Tup(_) | Type::TupArr(_, _))) => {
-                            Self::extract_tup_label_type(tup_type, label)
+                        Some(Type::Tup(tup_mode)) => {
 
+                            tup_mode.extract_label_type(label)
                                 // if the pattern was a ref to a tuple, make refs to all elements
                                 .map(|(_, typ)| if pointer_count > 0 {
                                         let lifetime = self.new_infer_lifetime();
@@ -136,14 +133,14 @@ impl<'ast> TypeChecker<'ast> {
                             TypeTuple { label: tt.label.clone(), typ }
                         }).collect();
 
-                    let unborrowed_tuple = self.type_arena.add_type(Type::Tup(elems));
+                    let unborrowed_tuple = self.type_arena.add_type(Type::Tup(TupMode::Tup(elems)));
                     self.unify_types(base, unborrowed_tuple, span, UnifyMode::Subtype);
                 }
 
                 if pointer_count > 0 {
                     ctx.expected_type.expect("if pointer_count exists, then ctx.expected_type should exist.")
                 } else {
-                    self.type_arena.add_type(Type::Tup(tuple_types))
+                    self.type_arena.add_type(Type::Tup(TupMode::Tup(tuple_types)))
                 }
             }
 
@@ -253,7 +250,7 @@ impl<'ast> TypeChecker<'ast> {
 
                         match self.prune_type_once_infer_err(inner_new_type, span) {
                             Type::Error => TypeId::ERROR,
-                            Type::Tup(_) | Type::TupArr(_, _) => {
+                            Type::Tup(_) => {
                                 // if it expects a tuple, e.g. `type Point = { num, num }`
                                 // then just typecheck normally. (`data` is already a tuple expr)
                                 let (typ, covered) = self.check_match_pattern(
@@ -475,7 +472,7 @@ impl<'ast> TypeChecker<'ast> {
 
                 // this is not a perfect change, but it works for now
                 if any_explicit {
-                    Some(self.type_arena.add_type(Type::Tup(type_elems)))
+                    Some(self.type_arena.add_type(Type::Tup(TupMode::Tup(type_elems))))
                 } else {
                     None
                 }

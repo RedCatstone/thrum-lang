@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, Lifetime, ResolvedMemberAccess, ResolvedTypeInstantiation, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternCtx, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
+    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, Lifetime, ResolvedMemberAccess, ResolvedTypeInstantiation, TupMode, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternCtx, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
 };
 
 
@@ -70,8 +70,8 @@ impl TypeChecker<'_> {
                 let tuple_types = elems.iter()
                     .map(|AstTupleElement { label, expr }| {
                         let elem_expected_type = match &pruned_expected {
-                            Some(tup_type @ (Type::Tup(_) | Type::TupArr(_, _))) => {
-                                Self::extract_tup_label_type(tup_type, label).map(|(_, typ)| typ)
+                            Some(Type::Tup(tup_mode)) => {
+                                tup_mode.extract_label_type(label).map(|(_, typ)| typ)
                             }
 
                             // if the whole tuple is expected to be a metatype thats valid.
@@ -87,7 +87,7 @@ impl TypeChecker<'_> {
                     })
                     .collect();
 
-                self.type_arena.add_type(Type::Tup(tuple_types))
+                self.type_arena.add_type(Type::Tup(TupMode::Tup(tuple_types)))
             }
 
             Expr::TupleArr { elem, length } => {
@@ -98,7 +98,7 @@ impl TypeChecker<'_> {
                     Some(VmValue::Int(num)) => {
                         let const_length = num.try_into().unwrap();
                         self.typed_ast.resolved_tuple_arr_length.insert(check_expr, const_length);
-                        self.type_arena.add_type(Type::TupArr(elem_type, const_length))
+                        self.type_arena.add_type(Type::Tup(TupMode::Arr(elem_type, const_length)))
                     }
                     Some(other) => unreachable!("expected a num from typechecking, but got {other}"),
                     None => TypeId::ERROR
@@ -113,19 +113,13 @@ impl TypeChecker<'_> {
                 if let Type::Borrow { inner, mutable, lifetime } = self.prune_type_once_infer_err(left_pointer_type, left_span) {
 
                     let arr_inner_type = match self.prune_type_once_infer_err(inner, left_span) {
-                        Type::TupArr(inner, _) => inner,
-                        Type::Tup(elems) => {
-                            if elems.is_empty() {
-                                self.error(ErrType::TyperCantIndexEmptyTuple { typ: self.fmt_type(inner) }, span)
-                            } else {
-                                // tuple indexing is allowed if all types are equal
-                                let first_typ = elems[0].typ;
-                                if elems.iter().all(|e| e.typ == first_typ) {
-                                    first_typ
-                                } else {
-                                    self.error(ErrType::TyperCantIndexHeterogenousTuple { typ: self.fmt_type(inner) }, span)
-                                }
+                        Type::Tup(mode) => {
+                            if mode.len() == 0 {
+                                self.error(ErrType::TyperCantIndexEmptyTuple { typ: self.fmt_type(inner) }, span);
                             }
+
+                            self.get_tuple_inner_type_if_homogenous(&mode)
+                                .unwrap_or_else(|| self.error(ErrType::TyperCantIndexHeterogenousTuple { typ: self.fmt_type(inner) }, span))
                         }
                         Type::Error => TypeId::ERROR,
                         _ => self.error(ErrType::TyperCantIndexNonArrType { typ: self.fmt_type(inner) }, span)
@@ -136,8 +130,9 @@ impl TypeChecker<'_> {
                     self.type_arena.add_type(Type::Borrow { inner: arr_inner_type, mutable, lifetime })
                 }
                 else {
-                    let arr_type = self.type_arena.add_type(Type::TupArr(TypeId::ERROR, 1));
-                    self.type_mismatch(arr_type, left_pointer_type, span)
+                    let arr_type = self.type_arena.add_type(Type::Tup(TupMode::Arr(TypeId::ERROR, 1)));
+                    let arr_pointer_err = self.type_arena.add_type(Type::Borrow { inner: arr_type, mutable: false, lifetime: Lifetime::Static });
+                    self.type_mismatch(arr_pointer_err, left_pointer_type, span)
                 }
             }
 
@@ -836,24 +831,6 @@ impl TypeChecker<'_> {
 
 
 
-    pub(super) fn extract_tup_label_type(left_type: &Type, label: &str) -> Option<(usize, TypeId)> {
-        match left_type {
-            Type::Tup(elems) => {
-                elems.iter().enumerate()
-                    .find(|(_, elem)| elem.label == *label)
-                    .map(|(index, t)| (index, t.typ))
-            }
-            Type::TupArr(elem, len) => {
-                label.parse().map_or(
-                    None,
-                    |i| (i < *len).then_some((i, *elem))
-                )
-            }
-            _ => unreachable!("function should only be called with tuple types")
-        }
-    }
-
-
     /// this might be the most complicated function in this compiler...
     fn check_member_access(
         &mut self, left_type_id: TypeId, member_expr: ExprId,
@@ -868,10 +845,10 @@ impl TypeChecker<'_> {
 
         // check the member for special types first:
         match &left_type {
-            Type::Tup(_) | Type::TupArr(_, _) if !came_from_meta => {
+            Type::Tup(tup_mode) if !came_from_meta => {
                 // for tuples check if `member` matches a label
                 // e.g. `(1, 2).0` or `(x: 1, y: 2).y`
-                let found_data = Self::extract_tup_label_type(&left_type, member);
+                let found_data = tup_mode.extract_label_type(member);
 
                 if let Some((index, elem_type)) = found_data {
                     // if we came from a ref keep that ref
@@ -1126,7 +1103,7 @@ impl TypeChecker<'_> {
 
         match self.prune_type_once_infer_err(instance_type, span) {
             Type::Error => TypeId::ERROR,
-            Type::Tup(_) | Type::TupArr(_, _) => {
+            Type::Tup(_) => {
                 // if it expects a tuple, e.g. `type Point = { num, num }; Point{ 1, 2 }`
                 // then just typecheck normally. (`data` is already a tuple expr)
                 self.typed_ast.resolved_type_instantian.insert(check_expr, ResolvedTypeInstantiation::Tuple);

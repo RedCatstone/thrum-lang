@@ -1,5 +1,5 @@
 use crate::{
-    ErrType, lexing::tokens::Span, parsing::ast::ExprId, typing::{Lifetime, Type, TypeChecker, TypeId }
+    ErrType, lexing::tokens::Span, parsing::ast::ExprId, typing::{Lifetime, TupMode, Type, TypeChecker, TypeId }
 };
 
 
@@ -29,16 +29,28 @@ impl TypeChecker<'_> {
 
         match (expr_type, expected_type) {
             // Tuple -> MetaType
-            (Type::Tup(elems), Type::MetaType) => {
-                let labels = elems.into_iter().map(|elem| elem.label).collect();
+            (Type::Tup(mode), Type::MetaType) => {
+                let labels = match mode {
+                    TupMode::Tup(elems) => elems.into_iter().map(|elem| elem.label).collect(),
+                    TupMode::Arr(_, len) => (0..len).map(|x| x.to_string()).collect()
+                };
                 self.typed_ast.resolved_tuple_type_coerce.insert(expr, labels);
                 TypeId::TYPE
             }
-            // TupArr -> MetaType
-            (Type::TupArr(_, len), Type::MetaType) => {
-                let labels = (0..len).map(|x| x.to_string()).collect();
-                self.typed_ast.resolved_tuple_type_coerce.insert(expr, labels);
-                TypeId::TYPE
+
+            // &tuple -> &[T]
+            (Type::Borrow { inner: inner_expr, mutable: mut_expr, lifetime: life_expr },
+            Type::Borrow { inner: inner_expected, mutable: mut_expected, lifetime: life_expected })
+            if let Type::Tup(tup_mode) = self.prune_type_once(inner_expr)
+            && let Some(elem_expr) = self.get_tuple_inner_type_if_homogenous(&tup_mode)
+            && let Type::Slice(elem_expected) = self.prune_type_once(inner_expected)
+            && self.are_types_equivalent(elem_expr, elem_expected)
+            && (!mut_expected || mut_expr) => {
+
+                self.typed_ast.resolved_tuple_slice_coerce.insert(expr, tup_mode.len());
+                let lifetime = self.unify_lifetimes(life_expr, life_expected);
+
+                self.type_arena.add_type(Type::Borrow { inner: inner_expected, mutable: mut_expected, lifetime })
             }
 
             _ => expr_type_id
@@ -157,6 +169,23 @@ impl TypeChecker<'_> {
         }
     }
 
+
+    pub(super) fn get_tuple_inner_type_if_homogenous(&mut self, tup_mode: &TupMode) -> Option<TypeId> {
+        match tup_mode {
+            &TupMode::Arr(inner, _) => Some(inner),
+            TupMode::Tup(elems) => if let Some(first) = elems.first() {
+                let first_typ = first.typ;
+                if elems.iter().all(|e| self.are_types_equivalent(e.typ, first_typ)) {
+                    Some(first_typ)
+                } else {
+                    None
+                }
+            } else {
+                Some(self.new_infer_type())
+            }
+        }
+    }
+
     /// Some(true) - is autoclone
     /// Some(false) - isn't autoclone
     /// None - infer error
@@ -173,9 +202,10 @@ impl TypeChecker<'_> {
             | Type::Error => Some(true),
 
             Type::Str
+            | Type::Slice(_)
             | Type::Enum(_) => Some(false),
 
-            Type::Tup(inners) => {
+            Type::Tup(TupMode::Tup(inners)) => {
                 let mut all_clone = true;
                 for tt in inners {
                     match self.is_auto_clone(tt.typ) {
@@ -187,7 +217,7 @@ impl TypeChecker<'_> {
                 Some(all_clone)
             }
 
-            Type::TupArr(inner, _)
+            Type::Tup(TupMode::Arr(inner, _))
             | Type::CustomType(_, inner)
             | Type::EnumVariant { inner, .. } => self.is_auto_clone(inner),
 
@@ -197,7 +227,7 @@ impl TypeChecker<'_> {
 
     fn is_unsized(&self, typ: TypeId) -> Option<bool> {
         match self.prune_type_once(typ) {
-            Type::Str => Some(true),
+            Type::Str | Type::Slice(_) => Some(true),
             Type::CustomType(_, inner) => self.is_unsized(inner),
 
             Type::Infer(_) => None,

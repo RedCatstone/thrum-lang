@@ -1,4 +1,4 @@
-use crate::{A_LOT_OF_DEBUG_OUTPUT, ErrType, pretty_printing::slice_to_string, typing::{Lifetime, Type, TypeArena, TypeTuple}, vm_compiling::{CompilingStatus, FunctionRegistry, NumMode, OpCode, VmSlice, VmValue}};
+use crate::{A_LOT_OF_DEBUG_OUTPUT, ErrType, pretty_printing::slice_to_string, typing::{Lifetime, TupMode, Type, TypeArena, TypeTuple}, vm_compiling::{CompilingStatus, FunctionRegistry, NumMode, OpCode, VmSlice, VmValue}};
 
 
 
@@ -422,7 +422,7 @@ impl<'a> VM<'a> {
                         .collect();
 
                     let tup_type = self.type_arena.as_mut().expect("tried to access the type_arena, but there was none...")
-                        .add_type(Type::Tup(tup_type));
+                        .add_type(Type::Tup(TupMode::Tup(tup_type)));
                     self.stack_push_val(VmValue::Type(tup_type));
                 }
 
