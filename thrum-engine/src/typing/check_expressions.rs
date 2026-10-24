@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, Lifetime, ResolvedMemberAccess, ResolvedTypeInstantiation, TupMode, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternCtx, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
+    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, nativelib, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, Lifetime, ResolvedMemberAccess, ResolvedTypeInstantiation, TupMode, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternCtx, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
 };
 
 
@@ -105,6 +105,11 @@ impl TypeChecker<'_> {
                 }
             }
 
+            Expr::SliceType { elem } => {
+                self.check_expression(*elem, is_never, ctx.expect(TypeId::TYPE).is_const());
+                TypeId::TYPE
+            }
+
             Expr::Index { left, index } => {
                 let arr_ctx = if old_ctx.auto_borrow_mut { ctx.auto_borrow_mut(true) } else { ctx };
                 let left_pointer_type = self.check_expression(*left, is_never, arr_ctx.auto_deref(AutoDerefMode::LeaveOnePointer));
@@ -118,9 +123,17 @@ impl TypeChecker<'_> {
                                 self.error(ErrType::TyperCantIndexEmptyTuple { typ: self.fmt_type(inner) }, span);
                             }
 
-                            self.get_tuple_inner_type_if_homogenous(&mode)
-                                .unwrap_or_else(|| self.error(ErrType::TyperCantIndexHeterogenousTuple { typ: self.fmt_type(inner) }, span))
+                            let inner = self.get_tuple_inner_type_if_homogenous(&mode)
+                                .unwrap_or_else(|| self.error(ErrType::TyperCantIndexHeterogenousTuple { typ: self.fmt_type(inner) }, span));
+
+                            self.typed_ast.resolved_index_type_is_tup.insert(check_expr);
+                            inner
                         }
+
+                        Type::Slice(inner) => {
+                            inner
+                        }
+
                         Type::Error => TypeId::ERROR,
                         _ => self.error(ErrType::TyperCantIndexNonArrType { typ: self.fmt_type(inner) }, span)
                     };
@@ -184,7 +197,7 @@ impl TypeChecker<'_> {
                 };
                 self.exit_scope();
                 last_type
-            },
+            }
 
             Expr::Prefix { op, right } => {
                 match op {
@@ -239,7 +252,7 @@ impl TypeChecker<'_> {
 
                 // determine the final type: (used to be more complicated, thats why this comment is here lol)
                 self.unify_types(then_type, alt_type, span, UnifyMode::FindParentType)
-            },
+            }
 
             Expr::Match { match_value, arms } => {
                 let match_val_type = self.check_expression(*match_value, is_never, ctx);
@@ -281,7 +294,7 @@ impl TypeChecker<'_> {
 
                 self.merge_vars_states(original_snap, &arm_snapshots);
                 self.unify_type_vec(&arm_expr_types, span)
-            },
+            }
 
             Expr::Loop { body, label } => {
                 let loop_break_type = old_ctx.expected_type.unwrap_or_else(|| self.new_infer_type());
@@ -302,7 +315,7 @@ impl TypeChecker<'_> {
                 } else {
                     loop_break_type
                 }
-            },
+            }
 
             Expr::Assign { pattern, value, extra_op, op_span } => {
                 let value_type = self.check_assign_pattern_and_value(
@@ -314,7 +327,7 @@ impl TypeChecker<'_> {
                     self.unify_types(value_type, infixed_typ, *op_span, UnifyMode::Subtype);
                 }
                 TypeId::VOID
-            },
+            }
 
             Expr::EmptyLet { pattern } => {
                 self.check_assign_pattern_and_value(*pattern, None, is_never, true, false, false, None);
@@ -327,7 +340,7 @@ impl TypeChecker<'_> {
                 );
 
                 TypeId::BOOL
-            },
+            }
 
             Expr::Move { expr } => {
                 let expr_type = self.check_expression(*expr, is_never, ctx);
@@ -344,7 +357,7 @@ impl TypeChecker<'_> {
                     Type::Error => TypeId::ERROR,
                     _ => self.error(ErrType::TyperCantDerefNonPointerType { typ: self.fmt_type(expr_type) }, span)
                 }
-            },
+            }
 
             Expr::Borrow { expr, mutable: _ } => {
                 self.check_expression(*expr, is_never, ctx.auto_deref(AutoDerefMode::Fully).expect(TypeId::TYPE).is_const())
@@ -364,7 +377,7 @@ impl TypeChecker<'_> {
                 self.check_expression(*expr, &mut false, ctx.expect(curr_return_type));
 
                 TypeId::NEVER
-            },
+            }
 
             Expr::Break { expr, label } => {
                 let break_info = self.find_loop_label(label.as_deref(), span).map(|info| info.typ);
@@ -398,7 +411,7 @@ impl TypeChecker<'_> {
                 }
 
                 TypeId::NEVER
-            },
+            }
 
             Expr::Continue { label } => {
                 if let Some(info) = self.find_loop_label(label.as_deref(), span) {
@@ -442,7 +455,7 @@ impl TypeChecker<'_> {
                     Type::Error => TypeId::ERROR,
                     _ => self.error(ErrType::TyperCantCallNonFnType { typ: self.fmt_type(callee_type) }, callee_span)
                 }
-            },
+            }
 
 
             Expr::MemberAccess { left, member: _ } => {
@@ -935,6 +948,23 @@ impl TypeChecker<'_> {
             }
 
             Type::Borrow { inner, mutable, lifetime } => {
+                if let Type::Slice(_) = self.prune_type_once(inner) && !came_from_meta && member == "len" {
+
+                    self.typed_ast.resolved_member_access.insert(member_expr, ResolvedMemberAccess::MemberWithSelfSugar {
+                        constant: VmValue::NativeFn(nativelib::native_slice_len),
+                        self_sugar_expr: *left }
+                    );
+
+                    // .len() takes &[T], not [T] by value, so pass left_type_id
+                    let fn_type = self.type_arena.add_type(Type::Fn {
+                        param_types: vec![left_type_id],
+                        return_type: TypeId::INT,
+                    });
+
+                    // wrap in a borrow for whatever reason, dont question it.
+                    return self.type_arena.add_type(Type::Borrow { inner: fn_type, mutable: false, lifetime: Lifetime::Static });
+                }
+
                 // if we already came from a borrow before this borrow, just deref it
                 // this function does not support (double ref).access
                 if came_from_ref.is_some() {

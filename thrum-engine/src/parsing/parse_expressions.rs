@@ -290,6 +290,12 @@ impl Parser<'_> {
                 expr
             }
 
+            TokenKind::LeftBracket => {
+                let elem = self.parse_expression_default(ctx);
+                self.expect_token(TokenKind::RightBracket, "to close the slice type");
+                self.add_expr(start, Expr::SliceType { elem })
+            }
+
             TokenKind::StringStart => {
                 let mut elems = Vec::new();
                 let mut only_string_frags = true;
@@ -642,10 +648,16 @@ impl Parser<'_> {
         let first_elem = self.parse_one_tuple_expression("0".to_string(), allow_let, &mut is_stmt);
 
         let expr = if self.optional_token(TokenKind::Semicolon) {
-            // `(true; 3)`
-            let length = self.parse_expression_default(ParserCtx { stop_on_newline_is: false });
-            self.expect_token(end_token, "to close the tuple array expression");
-            self.add_expr(start, Expr::TupleArr { elem: first_elem.expr, length })
+
+            if self.optional_token(end_token) {
+                // `(bool;)`
+                self.add_expr(start, Expr::SliceType { elem: first_elem.expr })
+            } else {
+                // `(true; 3)`
+                let length = self.parse_expression_default(ParserCtx { stop_on_newline_is: false });
+                self.expect_token(end_token, "to close the tuple array expression");
+                self.add_expr(start, Expr::TupleArr { elem: first_elem.expr, length })
+            }
         }
         else if self.optional_token(TokenKind::Comma) {
             // comma => definitely a tuple

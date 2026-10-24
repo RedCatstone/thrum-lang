@@ -211,7 +211,8 @@ impl<'a> Parser<'a> {
         matches!(self.peek().token,
             TokenKind::Exclamation | TokenKind::Op(AssignOp::Minus | AssignOp::Star) | TokenKind::Identifier
             | TokenKind::Mut | TokenKind::NumInt | TokenKind::NumFloat | TokenKind::Bool(_)
-            | TokenKind::LeftBrace | TokenKind::LeftParen | TokenKind::StringStart | TokenKind::Let | TokenKind::Const | TokenKind::Type
+            | TokenKind::LeftBrace | TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::StringStart
+            | TokenKind::Let | TokenKind::Const | TokenKind::Type
             | TokenKind::If | TokenKind::Ensure | TokenKind::While | TokenKind::For | TokenKind::Loop | TokenKind::Match | TokenKind::Enum
             | TokenKind::Impl | TokenKind::ImplSelf | TokenKind::Colon | TokenKind::Fn | TokenKind::Pipe
             | TokenKind::Return | TokenKind::Break | TokenKind::Continue | TokenKind::Ampersand

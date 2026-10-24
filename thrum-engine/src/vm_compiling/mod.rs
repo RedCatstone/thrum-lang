@@ -1,3 +1,4 @@
+use core::slice;
 use std::collections::HashMap;
 
 use derive_more::Display;
@@ -31,7 +32,7 @@ pub enum VmValue {
     // this SHOULD be fully safe, since the borrow checker checked all the lifetimes.
     #[display("*<{_0:?}>")]
     ValuePointer(*mut Self),
-    #[display("\"{}\"", _0.as_str())]
+    #[display("{:?}", _0.as_bytes())]
     Slice(VmSlice),
     #[display("nativeFn<{_0:?}>")]
     NativeFn(fn(&[Self]) -> Result<Self, ErrType>),
@@ -63,6 +64,12 @@ impl VmSlice {
             std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.ptr, self.len))
         }
     }
+
+    #[must_use] pub const fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            slice::from_raw_parts(self.ptr, self.len)
+        }
+    }
 }
 
 impl PartialEq for VmValue {
@@ -79,7 +86,7 @@ impl PartialOrd for VmValue {
             (Self::Bool(l), Self::Bool(r)) => l.partial_cmp(r),
             (Self::Tup(l), Self::Tup(r)) => l.partial_cmp(r),
             (Self::ValuePointer(l), Self::ValuePointer(r)) => l.partial_cmp(r),
-            (Self::Slice(l), Self::Slice(r)) => l.as_str().partial_cmp(r.as_str()),
+            (Self::Slice(l), Self::Slice(r)) => l.as_bytes().partial_cmp(r.as_bytes()),
             (Self::Fn { slot: l }, Self::Fn { slot: r }) => l.partial_cmp(r),
             (Self::Void, Self::Void) | (Self::Empty, Self::Empty) => Some(std::cmp::Ordering::Equal),
             (Self::Type(l), Self::Type(r)) => l.partial_cmp(r),
@@ -151,6 +158,9 @@ pub enum OpCode {
     TupUnpack { length: usize },
     TupPointerUnpack { length: usize },
 
+    // Slices
+    SliceIndex,
+
     // Strings
     StrAdd,
     StrTemplate { length: usize },
@@ -176,6 +186,8 @@ pub enum OpCode {
     // meta type stuff
     MakeTypeRef { mutable: bool },
     TypeTupToTupType { labels: Box<[String]> },
+    TupPointerToSlice { length: usize },
+    MakeTypeSlice,
 
     // no-op
     NoOp
@@ -195,7 +207,8 @@ struct OpCodeRuntimeTempDiff { requires: usize, diff: isize }
 impl OpCode {
     fn runtime_temp_effect(&self) -> OpCodeRuntimeTempDiff {
         match self {
-            Self::ConstGet { .. } | Self::ConstGetRef { .. } | Self::ConstGetSlice { .. } | Self::LocalSlice { .. }
+            Self::ConstGet { .. } | Self::ConstGetRef { .. }
+            | Self::ConstGetSlice { .. } | Self::LocalSlice { .. }
             | Self::PushVoid | Self::LocalPointer { .. } => OpCodeRuntimeTempDiff { requires: 0, diff: 1 },
 
             Self::ValuePop | Self::LocalSet { .. } | Self::JumpIfFalse { .. } => OpCodeRuntimeTempDiff { requires: 1, diff: -1 },
@@ -209,12 +222,14 @@ impl OpCode {
             Self::PointerGetClone | Self::PointerGetMove
             | Self::TupPointerGet { .. } | Self::TupGet { .. } | Self::TupArrCreate { length: _ }
             | Self::NumNegate { num_mode: _ } | Self::BoolNegate
-            | Self::MakeTypeRef { .. }
+            | Self::MakeTypeRef { .. } | Self::MakeTypeSlice
+            | Self::TupPointerToSlice { length: _ }
             | Self::Return | Self::Panic
             | Self::TypeTupToTupType { labels: _ } => OpCodeRuntimeTempDiff { requires: 1, diff: 0 },
 
-            Self::CmpEqual | Self::CmpEqualPointer | Self::CmpLess | Self::CmpGreater
-            | Self::TupPointerIndex
+            Self::CmpEqual | Self::CmpEqualPointer
+            | Self::CmpLess | Self::CmpGreater
+            | Self::TupPointerIndex | Self::SliceIndex
             | Self::NumAdd { num_mode: _ } | Self::NumSubtract { num_mode: _ }
             | Self::NumMultiply { num_mode: _ } | Self::NumDivide { num_mode: _ } | Self::NumModulo { num_mode: _ }
             | Self::StrAdd => OpCodeRuntimeTempDiff { requires: 2, diff: -1 },
@@ -640,7 +655,11 @@ impl VmCompiler<'_> {
             Expr::Index { left, index } => {
                 self.compile_expression(*left);
                 self.compile_expression(*index);
-                self.push_op(OpCode::TupPointerIndex);
+                if self.typed_ast.resolved_index_type_is_tup.contains(&compile_expr) {
+                    self.push_op(OpCode::TupPointerIndex);
+                } else {
+                    self.push_op(OpCode::SliceIndex);
+                }
             }
 
 
@@ -757,6 +776,11 @@ impl VmCompiler<'_> {
                 self.push_op(OpCode::MakeTypeRef { mutable: *mutable });
             }
 
+            Expr::SliceType { elem } => {
+                self.compile_expression(*elem);
+                self.push_op(OpCode::MakeTypeSlice);
+            }
+
             // do nothing here, these are only for the typechecker.
             Expr::Const { .. }
             | Expr::CustomType { .. }
@@ -774,6 +798,10 @@ impl VmCompiler<'_> {
 
         if let Some(labels) = self.typed_ast.resolved_tuple_type_coerce.get(&compile_expr) {
             self.push_op(OpCode::TypeTupToTupType { labels: labels.clone() });
+        }
+
+        if let Some(&len) = self.typed_ast.resolved_tuple_slice_coerce.get(&compile_expr) {
+            self.push_op(OpCode::TupPointerToSlice { length: len });
         }
 
         assert!(start_temps + 1 == self.cur_temp_amount,

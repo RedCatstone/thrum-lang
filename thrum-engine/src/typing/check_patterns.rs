@@ -124,7 +124,7 @@ impl<'ast> TypeChecker<'ast> {
 
                 if let Some(base) = base_expected {
                     let elems = tuple_types.iter().map(|tt| {
-                            let typ = if let Some((_, _, elem_base)) = self.count_initial_pointers(tt.typ) {
+                            let typ = if let Some((_, _, elem_base)) = self.count_derefable_pointers(tt.typ) {
                                 elem_base
                             } else {
                                 self.error(ErrType::TyperTypeMustBeKnownHere { typ: self.fmt_type(tt.typ) }, span)
@@ -415,7 +415,7 @@ impl<'ast> TypeChecker<'ast> {
 
 
     fn unwrap_and_record_pattern_derefs(&mut self, pattern: PatternId, expected: Option<TypeId>) -> (usize, Option<TypeId>) {
-        let (pointer_count, base_expected) = match expected.and_then(|e| self.count_initial_pointers(e)) {
+        let (pointer_count, base_expected) = match expected.and_then(|e| self.count_derefable_pointers(e)) {
             Some((count, _, base)) => (count, Some(base)),
             None => (0, expected),
         };

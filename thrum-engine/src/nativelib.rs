@@ -42,7 +42,7 @@ pub fn get_native_lib(type_arena: &mut TypeArena) -> ThrumModule {
     let mut str_methods = HashMap::new();
     str_methods.insert("len".to_string(), ThrumValue {
         typ: Type::Fn { param_types: vec![str_slice_type], return_type: TypeId::INT },
-        val: VmValue::NativeFn(native_str_len),
+        val: VmValue::NativeFn(native_slice_len),
         is_prelude: true
     });
     std_module.type_impls.insert(TypeId::STR, str_methods);
@@ -76,7 +76,7 @@ pub fn native_panic(val: &[VmValue]) -> Result<VmValue, ErrType> {
     Err(ErrType::RuntimeError { msg: slice.as_str().to_string() })
 }
 
-pub fn native_str_len(val: &[VmValue]) -> Result<VmValue, ErrType> {
+pub fn native_slice_len(val: &[VmValue]) -> Result<VmValue, ErrType> {
     let VmValue::Slice(slice) = &val[0] else { panic!("function called with wrong argument...") };
     Ok(VmValue::Int(slice.len.try_into().unwrap()))
 }

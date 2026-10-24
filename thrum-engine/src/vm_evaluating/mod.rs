@@ -268,21 +268,6 @@ impl<'a> VM<'a> {
                     let val = tup[*index].clone();
                     self.stack_push_val(val);
                 }
-                OpCode::TupPointerIndex => {
-                    let VmValue::Int(i) = self.value_stack.pop().unwrap() else { unreachable!() };
-
-                    let VmValue::ValuePointer(arr_pointer) = self.value_stack.pop().unwrap() else { unreachable!() };
-                    let VmValue::Tup(tup) = (unsafe { &mut *arr_pointer }) else { unreachable!() };
-
-                    let i_usize = usize::try_from(i).unwrap();
-                    if i < 0 || i_usize >= tup.len() {
-                        return Err(ErrType::RuntimeError { msg: format!("Index {i_usize} is out of bounds for arr of length {}.", tup.len()) });
-                    }
-
-                    self.stack_push_val(VmValue::ValuePointer(
-                        &raw mut tup[i_usize]
-                    ));
-                }
 
                 OpCode::TupUnpack { length } => {
                     let VmValue::Tup(tup) = self.value_stack.pop().unwrap() else { unreachable!("last value was not a tuple") };
@@ -302,6 +287,50 @@ impl<'a> VM<'a> {
                     for elem in &mut tup[0..*length] {
                         self.stack_push_val(VmValue::ValuePointer(elem));
                     }
+                }
+
+                OpCode::TupPointerIndex => {
+                    let VmValue::Int(i) = self.value_stack.pop().unwrap() else { unreachable!() };
+
+                    let VmValue::ValuePointer(arr_pointer) = self.value_stack.pop().unwrap() else { unreachable!() };
+                    let VmValue::Tup(tup) = (unsafe { &mut *arr_pointer }) else { unreachable!() };
+
+                    match usize::try_from(i) {
+                        Err(_) => return Err(ErrType::RuntimeError { msg: format!("Index {i} is out of bounds for arr of length {}.", tup.len()) }),
+                        Ok(i_usize) => {
+                            if i_usize >= tup.len() {
+                                return Err(ErrType::RuntimeError { msg: format!("Index {i} is out of bounds for arr of length {}.", tup.len()) });
+                            }
+
+                            self.stack_push_val(VmValue::ValuePointer(
+                                &raw mut tup[i_usize]
+                            ));
+                        }
+                    }
+                }
+
+                OpCode::SliceIndex => {
+                    let VmValue::Int(i) = self.value_stack.pop().unwrap() else { unreachable!() };
+                    let VmValue::Slice(slice) = self.value_stack.pop().unwrap() else { unreachable!() };
+
+                    let i_usize = usize::try_from(i).unwrap();
+                    if i < 0 || i_usize >= slice.len {
+                        return Err(ErrType::RuntimeError { msg: format!("Index {i_usize} is out of bounds for slice of length {}.", slice.len) });
+                    }
+
+                    let vmvalue_pointer = slice.ptr as *mut VmValue;
+                    let new_pointer = VmValue::ValuePointer(unsafe { vmvalue_pointer.add(i_usize) });
+                    self.stack_push_val(new_pointer);
+                }
+
+                OpCode::TupPointerToSlice { length } => {
+                    let VmValue::ValuePointer(arr_pointer) = self.value_stack.pop().unwrap() else { unreachable!() };
+                    let VmValue::Tup(tup) = (unsafe { &mut *arr_pointer }) else { unreachable!() };
+                    let slice = VmValue::Slice(VmSlice {
+                        ptr: tup.as_mut_ptr().cast::<u8>(),
+                        len: *length,
+                    });
+                    self.stack_push_val(slice);
                 }
 
 
@@ -406,6 +435,15 @@ impl<'a> VM<'a> {
                     self.stack_push_val(VmValue::Type(pointer_type));
                 }
 
+                OpCode::MakeTypeSlice => {
+                    let VmValue::Type(elem_type) = self.value_stack.pop().unwrap() else {
+                        unreachable!("last value was not a meta type")
+                    };
+                    let slice_type = self.type_arena.as_mut().expect("tried to access the type_arena, but there was none...")
+                        .add_type(Type::Slice(elem_type));
+                    self.stack_push_val(VmValue::Type(slice_type));
+                }
+
                 OpCode::TypeTupToTupType { labels } => {
                     let VmValue::Tup(tup) = self.value_stack.pop().unwrap() else {
                         unreachable!("last value was not a tup")
@@ -468,7 +506,7 @@ impl<'a> VM<'a> {
     fn val_to_string(val: &VmValue) -> String {
         match val {
             VmValue::OwnedStr(str) => str.clone(),
-            VmValue::Slice(slice) => slice.as_str().to_string(),
+            VmValue::Slice(slice) => format!("{:?}", slice.as_bytes()),
             VmValue::ValuePointer(p) => Self::val_to_string(unsafe { &**p }),
             VmValue::Int(_)
             | VmValue::Float(_)

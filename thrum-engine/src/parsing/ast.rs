@@ -65,6 +65,7 @@ pub enum Expr {
     Tuple { elems: Vec<AstTupleElement> },  // (1, 2)
     TupleArr { elem: ExprId, length: ExprId },  // (0; 4)
     Index { left: ExprId, index: ExprId },  // arr[1]
+    SliceType { elem: ExprId },  // [u8]
 
     If { condition: ExprId, then: ExprId, alt: ExprId, never_alt: bool },  // if true { ... } else ... (alt is void if not present)
     Is { value: ExprId, pattern: PatternId },  // queue.pop() is let .Some(x)

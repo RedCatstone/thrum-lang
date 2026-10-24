@@ -1,6 +1,10 @@
 // run me by doing `cargo run Code.thrum`
 
-"
-1\
-           2
-"
+let x = (1, 2, 3, 4, 5)
+let slice: &[int] = x
+let slice = slice
+let slice = slice
+let slice = slice
+let slice = slice
+
+slice[5]^

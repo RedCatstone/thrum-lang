@@ -182,6 +182,7 @@ pub struct TypedAst {
     pub resolved_tuple_arr_length: HashMap<ExprId, usize>,
     pub resolved_tuple_type_coerce: HashMap<ExprId, Box<[String]>>,
     pub resolved_tuple_slice_coerce: HashMap<ExprId, usize>,
+    pub resolved_index_type_is_tup: HashSet<ExprId>,
     pub resolved_enum_variant: HashMap<ExprId, (EnumId, usize)>,
     pub resolved_enum_variant_pattern: HashMap<PatternId, (EnumId, usize)>,
     pub resolved_closure_fn_id: HashMap<ExprId, usize>,

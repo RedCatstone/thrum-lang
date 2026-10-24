@@ -176,6 +176,10 @@ impl AstArena {
                 self.format_expr_recursive(*left, s, ind + 1, "arr", false)?;
                 self.format_expr_recursive(*index, s, ind + 1, "idx", true)
             }
+            Expr::SliceType { elem } => {
+                writeln!(s)?;
+                self.format_expr_recursive(*elem, s, ind + 1, "elem", true)
+            }
             Expr::If { condition, then, alt, never_alt: _ } => {
                 writeln!(s)?;
                 self.format_expr_recursive(*condition, s, ind + 1, "cond", false)?;

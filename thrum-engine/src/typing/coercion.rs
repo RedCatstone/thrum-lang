@@ -66,21 +66,30 @@ impl TypeChecker<'_> {
     fn auto_deref_to_expected_type(&mut self, expr: ExprId, expected_id: TypeId) -> TypeId {
         let expr_type = self.typed_ast.get_expr_type(expr);
 
-        if let Some((expr_p_count, is_auto_clone_after, _)) = self.count_initial_pointers(expr_type)
-        && let Some((expected_p_count, _, _)) = self.count_initial_pointers(expected_id) {
+        let (expr_p_count, expr_base) = self.count_borrow_layers(expr_type);
+        let (expected_p_count, _) = self.count_borrow_layers(expected_id);
+        let is_auto_clone_after = self.is_auto_clone(expr_base).unwrap_or(false);
 
-            // if we have more pointers than the expected_type, AND everything that needs to be derefed is auto_clone
-            if expr_p_count > expected_p_count && (expected_p_count != 0 || is_auto_clone_after) {
-                for _ in 0..(expr_p_count - expected_p_count) {
-                    assert!(self.deref_if_pointer(expr));
-                }
+        // if we have more pointers than the expected_type, AND everything that needs to be derefed is auto_clone
+        if expr_p_count > expected_p_count && (expected_p_count != 0 || is_auto_clone_after) {
+            for _ in 0..(expr_p_count - expected_p_count) {
+                assert!(self.deref_if_pointer(expr));
             }
         }
 
         self.typed_ast.get_expr_type(expr)
     }
 
-    pub(super) fn count_initial_pointers(&self, typ: TypeId) -> Option<(usize, bool, TypeId)> {
+    pub(super) fn count_borrow_layers(&self, mut typ: TypeId) -> (usize, TypeId) {
+        let mut count = 0;
+        while let Type::Borrow { inner, .. } = self.prune_type_once(typ) {
+            typ = inner;
+            count += 1;
+        }
+        (count, typ)
+    }
+
+    pub(super) fn count_derefable_pointers(&self, typ: TypeId) -> Option<(usize, bool, TypeId)> {
         let mut curr_typ = typ;
         let mut count = 0;
 
@@ -115,10 +124,9 @@ impl TypeChecker<'_> {
                 while self.deref_if_pointer(check_expr) { }
             }
             AutoDerefMode::LeaveOnePointer => {
-                if let Some((p_count, _, _)) = self.count_initial_pointers(self.typed_ast.get_expr_type(check_expr)) {
-                    for _ in 1..p_count {
-                        assert!(self.deref_if_pointer(check_expr));
-                    }
+                let (p_count, _) = self.count_borrow_layers(self.typed_ast.get_expr_type(check_expr));
+                for _ in 1..p_count {
+                    assert!(self.deref_if_pointer(check_expr));
                 }
             }
         }
