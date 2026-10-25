@@ -6,7 +6,7 @@ use derive_more::Display;
 use crate::{
     ErrType,
     lexing::tokens::{AssignOp, TokenKind},
-    parsing::ast::{AstArena, AstValue, Expr, ExprId, Pattern, PatternId},
+    nativelib, parsing::ast::{AstArena, AstValue, Expr, ExprId, Pattern, PatternId},
     pretty_printing::slice_to_string,
     typing::{ResolvedMemberAccess, ResolvedTypeInstantiation, TypeArena, TypeId, TypeVarId, TypedAst, type_vars::TypeVarConstVal},
     vm_evaluating
@@ -22,6 +22,10 @@ pub enum VmValue {
     #[display("^\"{_0}\"")]
     // OwnedStr's are not produced at runtime. They exist for the constant pool.
     OwnedStr(String),
+
+    #[display("fmt<>")]
+    FormatString(VmFormatString),
+
     #[display("{_0}")]
     Bool(bool),
 
@@ -72,6 +76,46 @@ impl VmSlice {
     }
 }
 
+
+
+#[derive(Debug, Clone)]
+pub struct VmFormatString {
+    pub str_pieces: Box<[VmSlice]>,
+    pub hole_values: Box<[VmFormatArg]>
+}
+
+#[derive(Debug, Clone)]
+pub struct VmFormatArg {
+    pub value: VmValue,
+    pub display_fn: VmFormatArgDisplayFn,
+}
+pub type VmFormatArgDisplayFn = fn(&VmValue, &mut dyn std::io::Write);
+
+impl VmFormatString {
+    pub fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
+        for (i, str_piece) in self.str_pieces.iter().enumerate() {
+            out.write_all(str_piece.as_str().as_bytes())?;
+            if let Some(arg) = self.hole_values.get(i) {
+                arg.write_to(out);
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use] pub fn display(&self) -> String {
+        let mut buf = Vec::new();
+        let _ = self.write_to(&mut buf);
+        String::from_utf8_lossy(&buf).to_string()
+    }
+}
+
+impl VmFormatArg {
+    pub fn write_to(&self, out: &mut dyn std::io::Write) {
+        (self.display_fn)(&self.value, out);
+    }
+}
+
+
 impl PartialEq for VmValue {
     #[track_caller] fn eq(&self, other: &Self) -> bool {
         self.partial_cmp(other) == Some(std::cmp::Ordering::Equal)
@@ -114,7 +158,27 @@ impl VmValue {
             Self::Slice(slice) => Self::OwnedStr(slice.as_str().to_string()),
             Self::Tup(elems) => Self::Tup(elems.iter().map(Self::to_owned_value).collect()),
             Self::ValuePointer(p) => unsafe { &**p }.to_owned_value(),
+            Self::FormatString(fmt) => {
+                let mut own = Vec::new();
+                fmt.write_to(&mut own).unwrap();
+                Self::OwnedStr(String::from_utf8(own).unwrap())
+            }
             _ => self.clone(),
+        }
+    }
+
+    pub fn val_to_string(val: &Self) -> String {
+        match val {
+            Self::OwnedStr(str) => str.clone(),
+            Self::Slice(slice) => format!("{:?}", slice.as_bytes()),
+            Self::ValuePointer(p) => Self::val_to_string(unsafe { &**p }),
+            Self::Int(_)
+            | Self::Float(_)
+            | Self::Bool(_)
+            | Self::Void
+            | Self::Tup(_) => format!("{val}"),
+
+            _ => panic!("Literal {val:?} cannot be converted into a string.")
         }
     }
 }
@@ -163,7 +227,7 @@ pub enum OpCode {
 
     // Strings
     StrAdd,
-    StrTemplate { length: usize },
+    MakeFmtString { const_str_pieces: usize, display_fns: Box<[VmFormatArgDisplayFn]> },
 
     /// these pop: [`TargetStr`]
     /// and push back: [`RemainingStr`, true] or [`TargetStr`, false]
@@ -234,8 +298,10 @@ impl OpCode {
             | Self::NumMultiply { num_mode: _ } | Self::NumDivide { num_mode: _ } | Self::NumModulo { num_mode: _ }
             | Self::StrAdd => OpCodeRuntimeTempDiff { requires: 2, diff: -1 },
 
-            Self::StrTemplate { length }
-            | Self::TupCreate { length } => OpCodeRuntimeTempDiff { requires: *length, diff: 1 - isize::try_from(*length).unwrap() },
+            Self::MakeFmtString { const_str_pieces: _, display_fns } => {
+                OpCodeRuntimeTempDiff { requires: display_fns.len(), diff: 1 - isize::try_from(display_fns.len()).unwrap() }
+            }
+            Self::TupCreate { length } => OpCodeRuntimeTempDiff { requires: *length, diff: 1 - isize::try_from(*length).unwrap() },
 
             Self::TupUnpack { length }
             | Self::TupPointerUnpack { length } => OpCodeRuntimeTempDiff { requires: 1, diff: isize::try_from(*length).unwrap() - 1 },
@@ -415,11 +481,22 @@ impl VmCompiler<'_> {
             Expr::Literal { val } => {
                 self.push_get_constant_op(VmValue::from(val.clone()));
             }
-            Expr::TemplateString { elems } => {
-                for &elem in elems {
-                    self.compile_expression(elem);
+            Expr::TemplateString { before, holes } => {
+                for &(hole_expr, _) in holes {
+                    self.compile_expression(hole_expr);
                 }
-                self.push_op(OpCode::StrTemplate { length: elems.len() });
+
+                let str_pieces = std::iter::once(before)
+                    .chain(
+                        holes.iter().map(|(_, x)| x)
+                    )
+                    .map(|x| VmValue::OwnedStr(x.clone()))
+                    .collect();
+
+                let const_str_pieces = self.add_constant(VmValue::Tup(str_pieces));
+                let display_fns = self.typed_ast.resolved_format_strings[&compile_expr].clone();
+
+                self.push_op(OpCode::MakeFmtString { const_str_pieces, display_fns });
             }
             Expr::TupleArr { elem, length: _ } => {
                 let const_length = self.typed_ast.resolved_tuple_arr_length[&compile_expr];
@@ -802,6 +879,16 @@ impl VmCompiler<'_> {
 
         if let Some(&len) = self.typed_ast.resolved_tuple_slice_coerce.get(&compile_expr) {
             self.push_op(OpCode::TupPointerToSlice { length: len });
+        }
+
+        if self.typed_ast.resolved_format_str_coerce.contains(&compile_expr) {
+            // this coercion is using a bit of a hack.
+            // its basically doing `"{str}"`, so 2 empty strings surrounding the str-expr
+            let empty_pieces = self.add_constant(VmValue::Tup(vec![VmValue::OwnedStr(String::new()); 2]));
+            self.push_op(OpCode::MakeFmtString {
+                const_str_pieces: empty_pieces,
+                display_fns: Box::new([nativelib::display_str]),
+            });
         }
 
         assert!(start_temps + 1 == self.cur_temp_amount,

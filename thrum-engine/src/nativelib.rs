@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, io::Write};
 
 use crate::{ErrType, typing::{Type, TypeArena, TypeId}, vm_compiling::VmValue};
 
@@ -23,7 +23,7 @@ pub fn get_native_lib(type_arena: &mut TypeArena) -> ThrumModule {
 
     let mut io_module = ThrumModule::default();
     io_module.values.insert("print".to_string(), ThrumValue {
-        typ: Type::Fn { param_types: vec![str_slice_type], return_type: TypeId::VOID },
+        typ: Type::Fn { param_types: vec![TypeId::FMT_STR], return_type: TypeId::VOID },
         val: VmValue::NativeFn(native_print),
         is_prelude: true,
     });
@@ -63,8 +63,15 @@ pub fn get_native_lib(type_arena: &mut TypeArena) -> ThrumModule {
 
 
 pub fn native_print(val: &[VmValue]) -> Result<VmValue, ErrType> {
-    let VmValue::Slice(slice) = &val[0] else { panic!("function called with wrong argument...") };
-    println!("{}", slice.as_str());
+    match &val[0] {
+        VmValue::Slice(slice) => println!("{}", slice.as_str()),
+        VmValue::FormatString(fmt) => {
+            let mut stdout = std::io::stdout().lock();
+            fmt.write_to(&mut stdout).map_err(|e| ErrType::RuntimeError { msg: e.to_string() })?;
+            let _ = stdout.write_all(b"\n");
+        }
+        _ => panic!("function called with wrong argument..."),
+    }
 
     Ok(VmValue::Void)
 }
@@ -79,4 +86,31 @@ pub fn native_panic(val: &[VmValue]) -> Result<VmValue, ErrType> {
 pub fn native_slice_len(val: &[VmValue]) -> Result<VmValue, ErrType> {
     let VmValue::Slice(slice) = &val[0] else { panic!("function called with wrong argument...") };
     Ok(VmValue::Int(slice.len.try_into().unwrap()))
+}
+
+
+
+pub fn display_int(value: &VmValue, out: &mut dyn std::io::Write) {
+    let VmValue::ValuePointer(p) = value else { unreachable!() };
+    let VmValue::Int(n) = (unsafe { &**p }) else { unreachable!() };
+    write!(out, "{n}").unwrap();
+}
+pub fn display_float(value: &VmValue, out: &mut dyn std::io::Write) {
+    let VmValue::ValuePointer(p) = value else { unreachable!() };
+    let VmValue::Float(n) = (unsafe { &**p }) else { unreachable!() };
+    write!(out, "{n}").unwrap();
+}
+pub fn display_bool(value: &VmValue, out: &mut dyn std::io::Write) {
+    let VmValue::ValuePointer(p) = value else { unreachable!() };
+    let VmValue::Bool(n) = (unsafe { &**p }) else { unreachable!() };
+    write!(out, "{n}").unwrap();
+}
+pub fn display_fmt_str(value: &VmValue, out: &mut dyn std::io::Write) {
+    let VmValue::ValuePointer(p) = value else { unreachable!() };
+    let VmValue::FormatString(n) = (unsafe { &**p }) else { unreachable!() };
+    n.write_to(out).unwrap();
+}
+pub fn display_str(value: &VmValue, out: &mut dyn std::io::Write) {
+    let VmValue::Slice(n) = value else { unreachable!() };
+    write!(out, "{}", n.as_str()).unwrap();
 }

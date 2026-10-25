@@ -4,7 +4,7 @@ use crate::{
     ErrType, ProgramError, ProgramErrorData, WarnType, lexing::tokens::Span, nativelib::get_native_lib,
     parsing::ast::{AstArena, AstIds, ExprId, PatternId},
     typing::{check_expressions::CheckExprCtx, type_vars::{SnapshotVarsState, TypeVar, TypeVarIsUsed, TypeVarScope}},
-    vm_compiling::{FunctionRegistry, NumMode, VmValue}
+    vm_compiling::{FunctionRegistry, NumMode, VmFormatArgDisplayFn, VmValue}
 };
 
 pub mod type_vars;
@@ -19,6 +19,7 @@ pub enum Type {
     NumInt,
     NumFloat,
     Str,
+    FmtStr,
     Bool,
 
     /// 0-bit type
@@ -110,18 +111,20 @@ pub struct TypeVarId(pub AstIds);
 pub struct LifetimeInferId(pub AstIds);
 
 impl TypeId {
-    pub const ERROR: Self = Self(0);
-    pub const NEVER: Self = Self(1);
-    pub const VOID:  Self = Self(2);
-    pub const TYPE:  Self = Self(3);
-    pub const INT:   Self = Self(4);
-    pub const FLOAT: Self = Self(5);
-    pub const BOOL:  Self = Self(6);
-    pub const STR:   Self = Self(7);
+    pub const ERROR:   Self = Self(0);
+    pub const NEVER:   Self = Self(1);
+    pub const VOID:    Self = Self(2);
+    pub const TYPE:    Self = Self(3);
+    pub const INT:     Self = Self(4);
+    pub const FLOAT:   Self = Self(5);
+    pub const BOOL:    Self = Self(6);
+    pub const STR:     Self = Self(7);
+    pub const FMT_STR: Self = Self(8);
 
-    pub const MAP_CONSTS: [(Self, Type); 8] = [
+    pub const MAP_CONSTS: &[(Self, Type)] = &[
         (Self::ERROR, Type::Error), (Self::NEVER, Type::Never), (Self::VOID, Type::Void), (Self::TYPE, Type::MetaType),
-        (Self::INT, Type::NumInt), (Self::FLOAT, Type::NumFloat), (Self::BOOL, Type::Bool), (Self::STR, Type::Str)
+        (Self::INT, Type::NumInt), (Self::FLOAT, Type::NumFloat), (Self::BOOL, Type::Bool), (Self::STR, Type::Str),
+        (Self::FMT_STR, Type::FmtStr)
     ];
 }
 
@@ -182,7 +185,10 @@ pub struct TypedAst {
     pub resolved_tuple_arr_length: HashMap<ExprId, usize>,
     pub resolved_tuple_type_coerce: HashMap<ExprId, Box<[String]>>,
     pub resolved_tuple_slice_coerce: HashMap<ExprId, usize>,
+    pub resolved_format_str_coerce: HashSet<ExprId>,
     pub resolved_index_type_is_tup: HashSet<ExprId>,
+    pub resolved_format_strings: HashMap<ExprId, Box<[VmFormatArgDisplayFn]>>,
+
     pub resolved_enum_variant: HashMap<ExprId, (EnumId, usize)>,
     pub resolved_enum_variant_pattern: HashMap<PatternId, (EnumId, usize)>,
     pub resolved_closure_fn_id: HashMap<ExprId, usize>,
@@ -219,7 +225,7 @@ impl TypeArena {
         let mut ta = Self { types: Vec::new(), type_dedup: HashMap::new() };
         // add the hardcoded types
         for (id, typ) in TypeId::MAP_CONSTS {
-            assert_eq!(id, ta.add_type(typ));
+            assert_eq!(*id, ta.add_type(typ.clone()));
         }
         ta
     }
@@ -573,6 +579,7 @@ impl TypeChecker<'_> {
             Type::NumInt => write!(s, "int"),
             Type::NumFloat => write!(s, "float"),
             Type::Str => write!(s, "str"),
+            Type::FmtStr => write!(s, "fmt"),
             Type::Bool => write!(s, "bool"),
             Type::Void => write!(s, "void"),
             Type::Never => write!(s, "never"),
@@ -771,7 +778,7 @@ impl TypeChecker<'_> {
                 self.type_arena.add_type(Type::Fn { param_types, return_type })
             }
 
-            Type::NumInt | Type::NumFloat | Type::Str | Type::Bool | Type::Void | Type::Never
+            Type::NumInt | Type::NumFloat | Type::Str | Type::FmtStr | Type::Bool | Type::Void | Type::Never
             | Type::MetaType | Type::Error | Type::Enum(_)
             | Type::Infer(_) => typ,
         }

@@ -254,8 +254,7 @@ pub fn run_code(source_code: &str) -> (Result<VmValue, Vec<ErrType>>, Vec<WarnTy
     let warnings = err_data.warnings.iter().map(|x| x.err_type.clone()).collect();
 
     let execution_start = Instant::now();
-    let result = unsafe { VM::start(&mut compiled_functions, None, 0) }
-        .map(|val| val.to_owned_value());  // temporary fix for returning pointers pointing into the vm
+    let result = unsafe { VM::start(&mut compiled_functions, None, 0) };
 
     let timer_str = format!("({GREEN}{:?}{RESET}, {GREEN}{:?}{RESET})",
         execution_start.duration_since(compile_start),

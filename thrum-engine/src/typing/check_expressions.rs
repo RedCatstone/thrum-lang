@@ -56,12 +56,41 @@ impl TypeChecker<'_> {
                 self.make_variable_ref(name, mutable, old_ctx.is_const, check_expr)
             }
 
-            Expr::TemplateString { elems } => {
-                for &elem in elems {
-                    self.check_expression(elem, is_never, ctx);
+            Expr::TemplateString { before: _, holes } => {
+                let mut arg_kinds = Vec::new();
+
+                for &(hole, _) in holes {
+                    let hole_type = self.check_expression(hole, is_never, ctx.auto_deref(AutoDerefMode::LeaveOnePointer));
+                    let hole_span = self.ast.get_expr_span(hole);
+
+                    let inner = match self.prune_type_once_infer_err(hole_type, hole_span) {
+                        Type::Borrow { inner, .. } => {
+                            inner
+                        }
+                        _ => TypeId::ERROR,
+                    };
+
+                    let display_fn = match self.prune_type_once_infer_err(inner, hole_span) {
+                        Type::NumInt => nativelib::display_int,
+                        Type::NumFloat => nativelib::display_float,
+                        Type::Bool => nativelib::display_bool,
+                        Type::Str => nativelib::display_str,
+                        Type::FmtStr => nativelib::display_fmt_str,
+                        _ => {
+                            self.error(ErrType::TyperMismatch {
+                                expected: "printable type (int, float, bool, str)".to_string(),
+                                found: self.fmt_type(inner),
+                            }, hole_span);
+                            nativelib::display_str
+                        }
+                    };
+
+                    arg_kinds.push(display_fn);
                 }
-                // TODO: make this a special TemplateString borrow struct, meaning that it would work without the heap
-                self.type_arena.get_static_str_borrow()
+
+                self.typed_ast.resolved_format_strings.insert(check_expr, arg_kinds.into_boxed_slice());
+
+                TypeId::FMT_STR
             }
 
             Expr::Tuple { elems } => {

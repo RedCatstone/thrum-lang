@@ -152,10 +152,11 @@ impl AstArena {
                 writeln!(s, " - .{member}")?;
                 self.format_expr_recursive(*left, s, ind + 1, "object", true)
             }
-            Expr::TemplateString { elems } => {
-                writeln!(s)?;
-                for (i, &e) in elems.iter().enumerate() {
-                    self.format_expr_recursive(e, s, ind + 1, "", i == elems.len() - 1)?;
+            Expr::TemplateString { before, holes } => {
+                writeln!(s, " - \"{before}\"")?;
+                for (i, hole_part) in holes.iter().enumerate() {
+                    self.format_expr_recursive(hole_part.0, s, ind + 1, "hole", i == holes.len() - 1)?;
+                    write!(s, "\"{}\"", hole_part.1)?;
                 }
                 Ok(())
             }

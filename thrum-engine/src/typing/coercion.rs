@@ -53,6 +53,13 @@ impl TypeChecker<'_> {
                 self.type_arena.add_type(Type::Borrow { inner: inner_expected, mutable: mut_expected, lifetime })
             }
 
+            // &str -> FmtStr
+            (Type::Borrow { inner, .. }, Type::FmtStr)
+            if let Type::Str = self.prune_type_once(inner) => {
+                self.typed_ast.resolved_format_str_coerce.insert(expr);
+                TypeId::FMT_STR
+            }
+
             _ => expr_type_id
         }
     }
@@ -207,6 +214,7 @@ impl TypeChecker<'_> {
             | Type::MetaType
             | Type::Void
             | Type::Never
+            | Type::FmtStr
             | Type::Error => Some(true),
 
             Type::Str

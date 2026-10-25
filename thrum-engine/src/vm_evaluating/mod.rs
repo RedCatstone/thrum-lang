@@ -1,4 +1,8 @@
-use crate::{A_LOT_OF_DEBUG_OUTPUT, ErrType, pretty_printing::slice_to_string, typing::{Lifetime, TupMode, Type, TypeArena, TypeTuple}, vm_compiling::{CompilingStatus, FunctionRegistry, NumMode, OpCode, VmSlice, VmValue}};
+use crate::{
+    A_LOT_OF_DEBUG_OUTPUT, ErrType, pretty_printing::slice_to_string,
+    typing::{Lifetime, TupMode, Type, TypeArena, TypeTuple},
+    vm_compiling::{CompilingStatus, FunctionRegistry, NumMode, OpCode, VmFormatArg, VmFormatString, VmSlice, VmValue}
+};
 
 
 
@@ -118,14 +122,7 @@ impl<'a> VM<'a> {
     /// If it fails, this will cause UB. :(
     pub unsafe fn run(&mut self) -> Result<VmValue, ErrType> {
         loop {
-            let Some(frame) = self.frames.last_mut() else {
-                // else the program finished!
-                let [final_val] = &self.value_stack[..] else {
-                    unreachable!("not exactly 1 final value?! {:?}", self.value_stack)
-                };
-                if A_LOT_OF_DEBUG_OUTPUT { println!() }
-                return Ok(final_val.clone())
-            };
+            let frame = self.frames.last_mut().unwrap();
             let CompilingStatus::Compiled(chunk) = &mut self.compiled_functions.compiled_functions[frame.chunk_index] else {
                 panic!("function {} was not compiled...", frame.chunk_index)
             };
@@ -336,13 +333,23 @@ impl<'a> VM<'a> {
 
                 // Strings
                 OpCode::StrAdd => infix_op!(self, VmValue::OwnedStr(l), VmValue::OwnedStr(r) => VmValue::OwnedStr(l + &r)),
-                OpCode::StrTemplate { length } => {
-                    let cut_off_index = self.value_stack.len() - length;
-                    let mut string = String::new();
-                    for val in self.value_stack.drain(cut_off_index..) {
-                        string += &Self::val_to_string(&val);
-                    }
-                    self.stack_push_val(VmValue::OwnedStr(string));
+
+                OpCode::MakeFmtString { const_str_pieces, display_fns } => {
+                    let VmValue::Tup(pieces_vec) = &chunk.constants[*const_str_pieces] else { unreachable!() };
+                    let str_pieces = pieces_vec.iter().map(|p| match p {
+                        VmValue::OwnedStr(s) => VmSlice { ptr: s.as_ptr(), len: s.len() },
+                        _ => unreachable!(),
+                    }).collect();
+
+                    let arg_count = display_fns.len();
+                    let cut_off_index = self.value_stack.len() - arg_count;
+
+                    let hole_values = self.value_stack.drain(cut_off_index..)
+                        .zip(display_fns)
+                        .map(|(value, &display_fn)| VmFormatArg { value, display_fn })
+                        .collect();
+
+                    self.stack_push_val(VmValue::FormatString(VmFormatString { str_pieces, hole_values }));
                 }
                 OpCode::StrTrimPrefix { const_str } => {
                     let VmValue::OwnedStr(prefix_str) = &chunk.constants[*const_str] else { unreachable!() };
@@ -467,9 +474,20 @@ impl<'a> VM<'a> {
                 // End of function / program
                 OpCode::Return => {
                     let return_value = self.value_stack.pop().unwrap();
+
+                    if self.frames.len() == 1 {
+                        // program is finishing!
+                        // turn pointers to owned values, while stack stuff is still alive
+                        // TODO: remove this temporary fix
+                        let final_value = return_value.to_owned_value();
+
+                        if A_LOT_OF_DEBUG_OUTPUT { println!() }
+                        return Ok(final_value);
+                    }
+
                     let new_len = self.value_stack.len() - chunk.local_slots_needed;
                     self.value_stack.truncate(new_len);
-                    self.stack_push_val(return_value);
+                    self.stack_push_val(return_value.clone());
                     self.frames.pop();
                 }
                 OpCode::Panic => {
@@ -499,22 +517,5 @@ impl<'a> VM<'a> {
         let cap_before_push = self.value_stack.capacity();
         self.value_stack.extend_from_slice(slice);
         assert!(cap_before_push <= self.value_stack.capacity(), "Stack Overflow limit of {cap_before_push} reached!");
-    }
-
-
-
-    fn val_to_string(val: &VmValue) -> String {
-        match val {
-            VmValue::OwnedStr(str) => str.clone(),
-            VmValue::Slice(slice) => format!("{:?}", slice.as_bytes()),
-            VmValue::ValuePointer(p) => Self::val_to_string(unsafe { &**p }),
-            VmValue::Int(_)
-            | VmValue::Float(_)
-            | VmValue::Bool(_)
-            | VmValue::Void
-            | VmValue::Tup(_) => format!("{val}"),
-
-            _ => panic!("Literal {val:?} cannot be converted into a string.")
-        }
     }
 }

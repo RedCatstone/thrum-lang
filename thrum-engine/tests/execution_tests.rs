@@ -235,20 +235,35 @@ mod common;
     test!(r#"  "abcd".len()  "#, VmValue::Int(4));
     test!(r#"  "🦀".len()  "#, VmValue::Int(4));
     test!(r#"  "ê".len()  "#, VmValue::Int(2));
-
-    // TODO: str templates without the heap
-    // test!(r#"
-    //     let piece = "orl"
-    //     "hello w{piece^}d!"
-    // "#, VmValue::HeapStr("hello world!".to_string()));
 }
 
-#[test] fn string_templates() {
-    // TODO: ...
-    // test!(
-    //     "\"hello {3-2}, {!true} and {69.08 / 22.0}, even works {\"nested\"}!\"",
-    //     VmValue::OwnedStr("hello 1, false and 3.14, even works nested!".to_string())
-    // );
+#[test] fn formatting_strings() {
+    test!(r#"
+        let piece = "orl"
+        "hello w{piece}d!"
+    "#, VmValue::OwnedStr("hello world!".to_string()));
+
+    test!(r#"
+        let x = 3-2
+        let xy = !true
+        let y = 69.08 / 22.0
+        let z = "nested"
+        "hello {x}, {xy} and {y}, even works {z}!"
+    "#, VmValue::OwnedStr("hello 1, false and 3.14, even works nested!".to_string())
+    );
+
+    test!(r#"
+        let x = 5
+        let y = 3.3
+        if true { "x: {x}, y: {y}" }
+        else { "y: {y}, x: {x}" }
+    "#, VmValue::OwnedStr("x: 5, y: 3.3".to_string()));
+    test!(r#"
+        let x = 5
+        let y = 3.3
+        if false { "x: {x}, y: {y}" }
+        else { "y: {y}, x: {x}" }
+    "#, VmValue::OwnedStr("y: 3.3, x: 5".to_string()));
 }
 
 #[test] fn delayed_let() {

@@ -297,29 +297,24 @@ impl Parser<'_> {
             }
 
             TokenKind::StringStart => {
-                let mut elems = Vec::new();
-                let mut only_string_frags = true;
+                let before = self.optional_string_frag();
+                let mut hole_parts = Vec::new();
 
                 while !self.optional_token(TokenKind::StringEnd) {
-                    if self.optional_token(TokenKind::StringFrag) {
-                        // extract the string from the source
-                        // we also need to handle backslashes here
-                        let source_frag = self.get_from_source(self.prev_token_span);
-                        let s = lexing::lex_string_from(source_frag);
+                    // "...{...}..."
+                    assert!(self.optional_token(TokenKind::LeftBrace), "lexer makes sure that there has to be a LeftBrace here");
 
-                        elems.push(self.add_expr(self.prev_token_span, Expr::Literal { val: AstValue::Str(s) }));
-                    }
-                    if self.optional_token(TokenKind::LeftBrace) {
-                        elems.push(self.parse_expression_default(ctx));
-                        only_string_frags = false;
-                        self.expect_token(TokenKind::RightBrace, "to close string interpolation");
-                    }
+                    let expr = self.parse_expression_default(ctx);
+                    self.expect_token(TokenKind::RightBrace, "to close string interpolation");
+
+                    let after = self.optional_string_frag();
+                    hole_parts.push((expr, after));
                 }
 
-                match elems[..] {
-                    [first] if only_string_frags => first,
-                    [] => self.add_expr(start, Expr::Literal { val: AstValue::Str(String::new()) }),
-                    _ => self.add_expr(start, Expr::TemplateString { elems }),
+                if hole_parts.is_empty() {
+                    self.add_expr(start, Expr::Literal { val: AstValue::Str(before) })
+                } else {
+                    self.add_expr(start, Expr::TemplateString { before, holes: hole_parts.into_boxed_slice() })
                 }
             },
 

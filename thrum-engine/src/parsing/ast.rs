@@ -61,7 +61,7 @@ pub enum Expr {
     MemberAccess { left: ExprId, member: String },  // arr.len
     TypeMemberAccess { left: ExprId, member: String },  // Option::Some
 
-    TemplateString { elems: Vec<ExprId> },  // "a{b}c" -> [Literal("a"), IdentifierRef("b"), Literal("c")]
+    TemplateString { before: String, holes: Box<[(ExprId, String)]> },  // "hello {2}!" -> before: "hello", holes: [(2, "!")]
     Tuple { elems: Vec<AstTupleElement> },  // (1, 2)
     TupleArr { elem: ExprId, length: ExprId },  // (0; 4)
     Index { left: ExprId, index: ExprId },  // arr[1]

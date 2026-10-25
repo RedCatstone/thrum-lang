@@ -92,13 +92,10 @@ impl Parser<'_> {
 
                 while !self.optional_token(TokenKind::StringEnd) {
                     // "...{...}..."
-                    let pattern = if self.optional_token(TokenKind::LeftBrace) {
-                        let pattern = self.parse_pattern(binding_mode, ctx);
-                        self.expect_token(TokenKind::RightBrace, "to close string pattern interpolation");
-                        pattern
-                    } else {
-                        unreachable!("lexer makes sure that there has to be a LeftBrace here")
-                    };
+                    assert!(self.optional_token(TokenKind::LeftBrace), "lexer makes sure that there has to be a LeftBrace here");
+
+                    let pattern = self.parse_pattern(binding_mode, ctx);
+                    self.expect_token(TokenKind::RightBrace, "to close string pattern interpolation");
 
                     let after = self.optional_string_frag();
                     hole_parts.push((pattern, after));
