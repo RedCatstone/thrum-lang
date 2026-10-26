@@ -1,5 +1,5 @@
 use crate::{
-    ErrType, lexing::tokens::Span, parsing::ast::ExprId, typing::{Lifetime, TupMode, Type, TypeChecker, TypeId }
+    ErrType, lexing::tokens::Span, parsing::ast::ExprId, typing::{Lifetime, TupMode, Type, TypeChecker, TypeId, UnifyMode }
 };
 
 
@@ -15,9 +15,7 @@ impl TypeChecker<'_> {
         self.auto_deref_to_expected_type(expr, expected_id);
 
         // 2. coercion.
-        let coerced = self.coerce_type(expr, expected_id);
-        self.typed_ast.expr_types[expr.0 as usize] = coerced;
-        coerced
+        self.coerce_type(expr, expected_id)
     }
 
 
@@ -27,7 +25,7 @@ impl TypeChecker<'_> {
         let expr_type = self.prune_type_once(expr_type_id);
         let expected_type = self.prune_type_once(expected_id);
 
-        match (expr_type, expected_type) {
+        let coerced = match (expr_type, expected_type) {
             // Tuple -> MetaType
             (Type::Tup(mode), Type::MetaType) => {
                 let labels = match mode {
@@ -61,7 +59,10 @@ impl TypeChecker<'_> {
             }
 
             _ => expr_type_id
-        }
+        };
+
+        self.typed_ast.expr_types[expr.0 as usize] = coerced;
+        coerced
     }
 
 
@@ -200,6 +201,73 @@ impl TypeChecker<'_> {
             }
         }
     }
+
+    pub(super) fn unify_branch_types(&mut self, branches: &[(ExprId, TypeId, bool/* is_never */)], span: Span) -> TypeId {
+        // filter out never-branches
+        let active: Vec<(ExprId, TypeId)> = branches.iter()
+            .filter_map(|&(expr, typ, is_never)| {
+                (!is_never && self.prune_id_once(typ) != TypeId::NEVER).then_some((expr, typ))
+            })
+            .collect();
+
+        match active.as_slice() {
+            // easy cases:
+            [] => TypeId::NEVER,
+            [(_, single_type)] => *single_type,
+
+            // hard case...
+            [(_, target), rest @ ..] => {
+                // THE target type for all branches
+                let mut target = *target;
+
+                // if any branch is a slice reference, it wins!
+                // (because &(T; N) can coerce to &[T], but &[T] can't coerce to &(T; N))
+                let mut slice_target = self.get_slice_ref_type(target);
+                for &(_, next_type) in rest {
+                    if let Some(slice_ref) = self.get_slice_ref_type(next_type) {
+                        slice_target = Some(slice_ref);
+                        break;
+                    }
+                }
+
+                if let Some(slice_ref) = slice_target {
+                    target = slice_ref;
+                } else {
+                    // otherwise, find the common target by reference depth & LUB
+                    for &(_, next_type) in rest {
+                        let (target_borrows, _) = self.count_borrow_layers(target);
+                        let (next_borrows, _) = self.count_borrow_layers(next_type);
+
+                        // less references wins (e.g. &str over &&str, int over &int)
+                        if target_borrows > next_borrows {
+                            target = next_type;
+                        } else if target_borrows == next_borrows {
+                            target = self.unify_types(target, next_type, span, UnifyMode::FindParentType);
+                        }
+                    }
+                }
+
+                // all shall become target.
+                for &(expr, _) in &active {
+                    self.coerce_to_expected_type(expr, target);
+                }
+
+                target
+            }
+        }
+    }
+
+    fn get_slice_ref_type(&mut self, mut typ: TypeId) -> Option<TypeId> {
+        while let Type::Borrow { inner, mutable, lifetime } = self.prune_type_once(typ) {
+            if let Type::Slice(_) = self.prune_type_once(inner) {
+                // Return a clean 1-layer reference to the slice: &[T] (or &mut [T])
+                return Some(self.type_arena.add_type(Type::Borrow { inner, mutable, lifetime }));
+            }
+            typ = inner;
+        }
+        None
+    }
+
 
     /// Some(true) - is autoclone
     /// Some(false) - isn't autoclone

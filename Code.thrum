@@ -1,10 +1,6 @@
 // run me by doing `cargo run Code.thrum`
 
 
-let x = 5
-let y = 3.3
-let f = if false {
-    "hello {x} and {y}!"
-} else {
-    "hello {x}..."
-}
+match "bla"
+is let "{x}" => x
+is _ => "none"

@@ -579,3 +579,37 @@ mod common;
         sum(arr)
     ", VmValue::Int(15));
 }
+
+
+#[test] fn coerce_branch_types() {
+    test!(r#"  if "bla" is let "{x}" => x else ""  "#,        VmValue::OwnedStr("bla".to_string()));
+    test!(r#"  match "bla" is let "{x}" => x, is _ => ""  "#, VmValue::OwnedStr("bla".to_string()));
+    test!("
+        let arr = (1, 2, 3)
+        let s: &[int] = arr
+        let coerce1 = if true => arr else s
+        let coerce2 = if false => arr else s
+        coerce1[1] + coerce2[2]
+    ", VmValue::Int(5));
+}
+
+
+#[test] fn random_one_liners() {
+    test!("fn triangle(n: int) -> int { let mut res = 0; for i in 0..=n => res += i; res }; triangle(10)", VmValue::Int(55));
+    test!("fn triangle(n: int) -> int => if n <= 1 => n else n + triangle(n - 1); triangle(10)", VmValue::Int(55));
+    test!("fn triangle(n: int) -> int => n * (n + 1) / 2; triangle(10)", VmValue::Int(55));
+
+    test!("fn fact(n: int) -> int { let mut res = 1; for i in 1..=n => res *= i; res }; fact(5)", VmValue::Int(120));
+    test!("fn fact(n: int) -> int => if n <= 1 => n else n * fact(n - 1); fact(5)", VmValue::Int(120));
+
+    test!("fn rev(mut n: int) -> int { let mut rev = 0; while n > 0 { rev = rev * 10 + (n % 10); n /= 10 }; rev }; rev(42069)", VmValue::Int(96024));
+
+    test!(r#"
+        if "https://youtu.be/dQw4w9WgXcQ" is let "{proto}://{domain}/{path}" => (proto, domain, path) else ("", "", "")
+    "#, VmValue::Tup(vec![VmValue::OwnedStr("https".to_string()), VmValue::OwnedStr("youtu.be".to_string()), VmValue::OwnedStr("dQw4w9WgXcQ".to_string())]));
+
+    test!("
+        fn is_prime(n: int) -> bool { for d in 2..n => if n % d == 0 => return false; n >= 2 }
+        let mut count = 0; for i in 0..10 => if is_prime(i) => count += 1; count
+    ", VmValue::Int(4));
+}

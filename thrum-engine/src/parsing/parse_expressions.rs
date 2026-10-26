@@ -347,7 +347,7 @@ impl Parser<'_> {
                 let condition = self.parse_expression(Precedence::Lowest, ctx);
                 let then = self.parse_arrow_or_block_expression("if", ctx);
                 let alt = if self.optional_token(TokenKind::Else) {
-                        self.parse_expression_default(ctx)
+                        self.parse_expression_or_statement(Precedence::Lowest, ctx, AllowStmt::AssignOnly).0
                     } else {
                         let then_span = self.ast.get_expr_span(then);
                         self.add_expr(then_span.to_0_width_right(), Expr::Void)

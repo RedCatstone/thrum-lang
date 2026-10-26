@@ -400,11 +400,6 @@ impl TypeChecker<'_> {
         let a = self.type_arena.types[id_a.0 as usize].clone();
         let b = self.type_arena.types[id_b.0 as usize].clone();
 
-        let mut new_mismatch = || {
-            *mismatch = true;
-            TypeId::ERROR
-        };
-
         let result: TypeId = match (a, b) {
             (Type::Never, _) => id_b,
             (_, Type::Never) => id_a,
@@ -419,7 +414,7 @@ impl TypeChecker<'_> {
             if let len = mode_a.len() && len == mode_b.len() => {
 
                 if let (&TupMode::Arr(inner_a, _), &TupMode::Arr(inner_b, _)) = (&mode_a, &mode_b) {
-                    let merged = self.unify_types(inner_a, inner_b, span, mode);
+                    let merged = self.internal_unify_types(inner_a, inner_b, span, mode, mismatch);
                     self.type_arena.add_type(Type::Tup(TupMode::Arr(merged, len)))
                 }
                 else {
@@ -430,7 +425,7 @@ impl TypeChecker<'_> {
                         let (label_b, typ_b) = mode_b.get(i);
 
                         new_elems.push(TypeTuple {
-                            typ: self.unify_types(typ_a, typ_b, span, mode),
+                            typ: self.internal_unify_types(typ_a, typ_b, span, mode, mismatch),
                             label: match (label_a, label_b) {
                                 (Some(a), Some(b)) => {
                                     if a != b {
@@ -451,14 +446,14 @@ impl TypeChecker<'_> {
 
 
             (Type::Slice(inner_a), Type::Slice(inner_b)) => {
-                let merged = self.unify_types(inner_a, inner_b, span, mode);
+                let merged = self.internal_unify_types(inner_a, inner_b, span, mode, mismatch);
                 self.type_arena.add_type(Type::Slice(merged))
             }
 
 
             (Type::CustomType(id_a, inner_a), Type::CustomType(id_b, inner_b))
             if id_a == id_b => {
-                let merged_inner = self.unify_types(inner_a, inner_b, span, mode);
+                let merged_inner = self.internal_unify_types(inner_a, inner_b, span, mode, mismatch);
                 self.type_arena.add_type(Type::CustomType(id_a, merged_inner))
 
                 // Different custom_id => they can't unify
@@ -471,25 +466,31 @@ impl TypeChecker<'_> {
 
             (Type::EnumVariant { inner: inner_a, variant: variant_a },
             Type::EnumVariant { inner: inner_b, variant: variant_b }) => {
-                let merged_inner = self.unify_types(inner_a, inner_b, span, mode);
+                let merged_inner = self.internal_unify_types(inner_a, inner_b, span, mode, mismatch);
 
                 if variant_a == variant_b {
                     self.type_arena.add_type(Type::EnumVariant { inner: merged_inner, variant: variant_a })
                 } else {
                     match mode {
                         UnifyMode::FindParentType => merged_inner,
-                        UnifyMode::Subtype => new_mismatch()
+                        UnifyMode::Subtype => {
+                            *mismatch = true;
+                            TypeId::ERROR
+                        }
                     }
                 }
             }
 
             // this direction is always allowed regardless of mode
-            (_, Type::EnumVariant { inner, .. }) => self.unify_types(id_a, inner, span, mode),
+            (_, Type::EnumVariant { inner, .. }) => self.internal_unify_types(id_a, inner, span, mode, mismatch),
             (Type::EnumVariant { inner, .. }, _) => {
                 // this direction is only allowed in LUB mode
                 match mode {
-                    UnifyMode::FindParentType => self.unify_types(inner, id_b, span, mode),
-                    UnifyMode::Subtype => new_mismatch()
+                    UnifyMode::FindParentType => self.internal_unify_types(inner, id_b, span, mode, mismatch),
+                    UnifyMode::Subtype => {
+                        *mismatch = true;
+                        TypeId::ERROR
+                    }
                 }
 
             }
@@ -497,7 +498,7 @@ impl TypeChecker<'_> {
 
             (Type::Borrow { mutable: mut_a, inner: inner_a, lifetime: life_a },
             Type::Borrow { mutable: mut_b, inner: inner_b, lifetime: life_b }) => {
-                let new_inner = self.unify_types(inner_a, inner_b, span, mode);
+                let new_inner = self.internal_unify_types(inner_a, inner_b, span, mode, mismatch);
                 if mut_a != mut_b {
                     *mismatch = true;
                 }
@@ -512,15 +513,18 @@ impl TypeChecker<'_> {
                 }
                 let mut new_params = Vec::new();
                 for (ia, ib) in params_a.into_iter().zip(params_b) {
-                    new_params.push(self.unify_types(ib, ia, span, mode));
+                    new_params.push(self.internal_unify_types(ib, ia, span, mode, mismatch));
                 }
-                let new_return = self.unify_types(return_a, return_b, span, mode);
+                let new_return = self.internal_unify_types(return_a, return_b, span, mode, mismatch);
 
                 self.type_arena.add_type(Type::Fn { param_types: new_params, return_type: new_return })
             }
 
             // any other case is a mismatch
-            _ => new_mismatch()
+            _ => {
+                *mismatch = true;
+                TypeId::ERROR
+            }
         };
 
         result
@@ -531,18 +535,6 @@ impl TypeChecker<'_> {
             (Lifetime::Static, other) | (other, Lifetime::Static) => other,
             (Lifetime::LocalVariable(v), _) | (_, Lifetime::LocalVariable(v)) => Lifetime::LocalVariable(v),
             (Lifetime::Infer(id), _) => Lifetime::Infer(id),
-        }
-    }
-
-    fn unify_type_vec(&mut self, types: &[TypeId], span: Span) -> TypeId {
-        if let Some((&first, others)) = types.split_first() {
-            let mut merged = first;
-            for &other in others {
-                merged = self.unify_types(first, other, span, UnifyMode::FindParentType);
-            }
-            merged
-        } else {
-            self.new_infer_type()
         }
     }
 

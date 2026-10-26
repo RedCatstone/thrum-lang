@@ -214,7 +214,10 @@ impl TypeChecker<'_> {
                             last_type
                         } else {
                             *is_never = false;
-                            self.unify_types(label_info.typ, last_type, self.ast.get_expr_span(last_expr), UnifyMode::FindParentType)
+                            self.unify_branch_types(
+                                &[(last_expr, last_type, false), (check_expr, label_info.typ, false)],
+                                self.ast.get_expr_span(last_expr),
+                            )
                         }
                     }
                     else {
@@ -279,8 +282,12 @@ impl TypeChecker<'_> {
                 let alt_snap = self.snapshot_branch_vars_state(alt_is_never);
                 self.merge_vars_states(snap_before, &[then_snap, alt_snap]);
 
+
                 // determine the final type: (used to be more complicated, thats why this comment is here lol)
-                self.unify_types(then_type, alt_type, span, UnifyMode::FindParentType)
+                self.unify_branch_types(
+                    &[(*then, then_type, then_is_never), (*alt, alt_type, alt_is_never)],
+                    self.ast.get_expr_span(*alt),
+                )
             }
 
             Expr::Match { match_value, arms } => {
@@ -288,11 +295,8 @@ impl TypeChecker<'_> {
 
                 let original_snap = self.snapshot_vars_state();
                 let mut arm_snapshots = Vec::new();
-
-                let mut arm_expr_types = Vec::new();
+                let mut arm_branches = Vec::new();
                 let mut covered_cases = Vec::new();
-
-                let mut all_arms_never = true;
 
                 for arm in arms {
                     self.enter_scope();
@@ -303,16 +307,14 @@ impl TypeChecker<'_> {
                     covered_cases.extend(arm_covered);
 
                     let mut arm_never = false;
-                    arm_expr_types.push(self.check_expression(arm.body, &mut arm_never, ctx.maybe_expect(old_ctx.expected_type)));
-                    if !arm_never { all_arms_never = false }
+                    let body_type = self.check_expression(arm.body, &mut arm_never, ctx.maybe_expect(old_ctx.expected_type));
                     self.exit_scope();
 
+                    arm_branches.push((arm.body, body_type, arm_never));
                     arm_snapshots.push(self.snapshot_branch_vars_state(arm_never));
 
                     self.restore_vars_state(&original_snap);
                 }
-
-                if all_arms_never { *is_never = true; }
 
                 let missing_cases = PatternSpace::covered_to_missing_cases(&covered_cases, &self.typed_ast.enum_defs);
                 if !missing_cases.is_empty() {
@@ -322,7 +324,7 @@ impl TypeChecker<'_> {
                 }
 
                 self.merge_vars_states(original_snap, &arm_snapshots);
-                self.unify_type_vec(&arm_expr_types, span)
+                self.unify_branch_types(&arm_branches, span)
             }
 
             Expr::Loop { body, label } => {
