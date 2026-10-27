@@ -448,7 +448,8 @@ impl<'ast> TypeChecker<'ast> {
                 let span = self.ast.get_expr_span(*expr);
 
                 Some(match self.prune_type_once_infer_err(expr_type, span) {
-                    Type::Borrow { inner, mutable: true, lifetime: _ } => {
+                    Type::Borrow { inner, mutable, lifetime: _ } => {
+                        if !mutable { self.error(ErrType::TyperCantMutateThroughImmutPointer { typ: self.fmt_type(expr_type) }, span); }
                         inner
                     }
                     Type::Error => TypeId::ERROR,

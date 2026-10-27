@@ -310,7 +310,7 @@ impl<'a> VM<'a> {
                     let VmValue::Int(i) = self.value_stack.pop().unwrap() else { unreachable!() };
                     let VmValue::Slice(slice) = self.value_stack.pop().unwrap() else { unreachable!() };
 
-                    let i_usize = usize::try_from(i).unwrap();
+                    let i_usize = i as usize;
                     if i < 0 || i_usize >= slice.len {
                         return Err(ErrType::RuntimeError { msg: format!("Index {i_usize} is out of bounds for slice of length {}.", slice.len) });
                     }

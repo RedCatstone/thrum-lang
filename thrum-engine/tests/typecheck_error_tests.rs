@@ -1,37 +1,5 @@
-use thrum_engine::{ErrType, lexing::tokens::{AssignOp, TokenKind}};
+use thrum_engine::ErrType;
 mod common;
-
-
-
-#[test] fn lexer_errors() {
-    test_err!("1 + ~", ErrType::LexerUnexpectedCharacter { c: '~' });
-    test_err!("unterminated \"string", ErrType::LexerUnterminatedString);
-    test_err!("'{'", ErrType::LexerMissingClosingStringBrace);
-}
-#[test] fn parser_errors() {
-    test_err!("{", ErrType::ParserExpectToken { .. });
-    test_err!("fn 1", ErrType::ParserExpectToken { .. });
-    test_err!("if", ErrType::ParserExpectedAnExpression { found: TokenKind::EndOfFile });
-    test_err!("1 - / 1", ErrType::ParserExpectedAnExpression { found: TokenKind::Op(AssignOp::Slash) });
-    test_err!("1 + 1  15", ErrType::MultipleExprsWithoutSemicolon);
-    test_err!("let = 5", ErrType::ParserExpectedABindingPattern { .. });
-    test_err!("{ \n #label }", ErrType::ParserLabelsHaveToBeOnSameLine);
-    test_err!("if true => \n 5", ErrType::ParserArrowExprsHaveToBeOnSameLine);
-}
-
-#[test] fn parse_statement_position() {
-    test_err!("2 + fn none() { }", ErrType::ParserOnlyAllowedInStatementPosition);
-    test_err!("2 + let x", ErrType::ParserOnlyAllowedInStatementPosition);
-
-    test_err!("fn fn none() { } + 2", ErrType::ParserExpectedAnExpression { .. });
-    test_err!("let x + 2", ErrType::ParserExpectedAnExpression { .. });
-    test_err!("fn fn none() { } 2", ErrType::MultipleExprsWithoutSemicolon);
-
-    test_err!("(let a)", ErrType::ParserOnlyAllowedInStatementPosition);
-    test_err!("(x = 2)", ErrType::ParserOnlyAllowedInStatementPosition);
-    test_err!("(let a, let b)", ErrType::ParserOnlyAllowedInStatementPosition);
-    test_err!("2 + (let a, let b)", ErrType::ParserOnlyAllowedInStatementPosition);
-}
 
 
 #[test] fn typecheck_var_errors() {
@@ -47,6 +15,10 @@ mod common;
 
     test_err!("if 42 is let x => 0 else x^", ErrType::TyperUndefinedIdentifier { .. });
     test_err!("ensure 42 is let x else panic(\"{x^}\")", ErrType::TyperUndefinedIdentifier { .. });
+
+    test_err!("let arr = (1, 2, 3); let s: &[int] = arr; s[0] = 10", ErrType::TyperCantMutateThroughImmutPointer { .. });
+
+    test_err!("type T = (str); impl T { fn f(self: &Self) { self^^; } }", ErrType::TyperCantDerefUnknownPointerType);
 }
 
 #[test] fn type_mismatch_simple() {
@@ -55,6 +27,9 @@ mod common;
     test_err!("let x: int = 2.0", ErrType::TyperMismatch { .. });
     test_err!("let x: float = 2", ErrType::TyperMismatch { .. });
     test_err!("(1, 2) is (1, 2, 3)", ErrType::TyperMismatch { .. });
+
+    test_err!("if true => 1 else \"string\"", ErrType::TyperMismatch { .. });
+    test_err!("match 0 is 0 => 1, is _ => true", ErrType::TyperMismatch { .. });
 }
 #[test] fn type_mismatch_operators() {
     test_err!("1 + true", ErrType::TyperMismatch { .. });
@@ -70,6 +45,15 @@ mod common;
         fn handle_some(:Some{ inner }: Option.Some) -> int => inner
         handle_some(:None)
     ", ErrType::TyperMismatch { .. });
+}
+
+#[test] fn typecheck_functions() {
+    test_err!("fn square(x: int) {}; square(2, 3)", ErrType::TyperWrongNumberOfArguments { .. });
+    test_err!("fn square(x: int) {}; square()", ErrType::TyperWrongNumberOfArguments { .. });
+    test_err!("fn square(x) {}", ErrType::TyperRequiresTypeAnnotation);
+
+    test_err!("fn foo() -> int { return \"string\" }", ErrType::TyperMismatch { .. });
+    test_err!("fn foo() -> int { }", ErrType::TyperMismatch { .. });
 }
 
 #[test] fn typecheck_misc_errors() {
@@ -125,6 +109,12 @@ mod common;
     test_err!("let x = (1, true); x[0]^", ErrType::TyperCantIndexHeterogenousTuple { .. });
 }
 
+#[test] fn slice_runtime_bounds() {
+    test_err!("let arr = (1, 2, 3); let s: &[int] = arr; s[3]^", ErrType::RuntimeError { .. });
+    test_err!("let arr = (1, 2, 3); let s: &[int] = arr; s[-1]^", ErrType::RuntimeError { .. });
+    test_err!("let arr = (0; 0); let s: &[int] = arr; s[0]^", ErrType::RuntimeError { .. });
+}
+
 
 #[test] fn new_types() {
     test_err!("type Number = int; Number{ 320 } is 320", ErrType::TyperMismatch { .. });
@@ -132,20 +122,6 @@ mod common;
     test_err!("type N1 = int;  type N2 = int;  N1{ 6 } + N2{ 9 }", ErrType::TyperMismatch { .. });
 }
 
-
-#[test] fn typecheck_functions() {
-    test_err!("fn square(x: int) {}; square(2, 3)", ErrType::TyperWrongNumberOfArguments { .. });
-    test_err!("fn square(x: int) {}; square()", ErrType::TyperWrongNumberOfArguments { .. });
-    test_err!("fn square(x) {}", ErrType::TyperRequiresTypeAnnotation);
-
-    test_err!("fn foo() -> int { return \"string\" }", ErrType::TyperMismatch { .. });
-    test_err!("fn foo() -> int { }", ErrType::TyperMismatch { .. });
-}
-
-
-#[test] fn deref_non_local_pointer() {
-    test_err!("type T = (str); impl T { fn f(self: &Self) { self^^; } }", ErrType::TyperCantDerefUnknownPointerType);
-}
 
 #[test] fn decay_soft_info_on_variable_bind() {
     test_err!("

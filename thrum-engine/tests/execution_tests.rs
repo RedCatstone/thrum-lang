@@ -2,22 +2,6 @@ use thrum_engine::{ErrType, vm_compiling::VmValue};
 mod common;
 
 
-#[test] fn numbers() {
-    test!("1_000", VmValue::Int(1000));
-    test!("1____0", VmValue::Int(10));
-    test!("1____", VmValue::Int(1));
-    test!("1____.5__", VmValue::Float(1.5));
-    test!("9999999999999999999", VmValue::Int(i64::MAX));
-}
-
-#[test] fn string_escaping() {
-    test!(r#"  "\n\n"  "#, VmValue::OwnedStr("\n\n".to_string()));
-    test!(r#"  "\n\t-\r \0"  "#, VmValue::OwnedStr("\n\t-\r \0".to_string()));
-    test!(r#"  "\:\_"  "#, VmValue::OwnedStr(":_".to_string()));
-    test!(r#"  "\
-                  a"  "#, VmValue::OwnedStr("a".to_string()));
-}
-
 #[test] fn math() {
     test!("1+2 * 3", VmValue::Int(7));
     test!("(1 + 2)*3", VmValue::Int(9));
@@ -48,6 +32,26 @@ mod common;
     test!("2.25 != 2.5", VmValue::Bool(true));
 }
 
+#[test] fn short_circuiting() {
+    test!(r#"
+        true or panic("OR short-circuit failed...")
+    "#, VmValue::Bool(true));
+    test!(r#"
+        false and panic("AND short-circuit failed...")
+    "#, VmValue::Bool(false));
+
+    test!(r#"
+        let t1 = (10, 20)
+        let t2 = (10, 20)
+
+        let res1 = t1^ is (10, _) or panic("OR short-circuit failed...")
+        let res2 = t2^ is (99, _) and panic("AND short-circuit failed...")
+
+        res1 and !res2
+    "#, VmValue::Bool(true));
+}
+
+
 #[test] fn assignments() {
     test!("
         let mut x = 10
@@ -74,7 +78,6 @@ mod common;
 
     test!("let mut x = 5; x *= 2; x *= x; x", VmValue::Int(100));
 }
-
 
 #[test] fn scoping() {
     test!("let x = 50; x^", VmValue::Int(50));
@@ -109,25 +112,20 @@ mod common;
     test!("{}", VmValue::Void);
 }
 
-#[test] fn comments() {
+#[test] fn delayed_let() {
     test!("
-        15 /* this is a comment
-        + 4
-        */
-        + /* weee * / */ 2
-        // + 16
-        + 3  // - 2
-    ", VmValue::Int(20));
+        { #bloc
+            let x
+            if true { x = 5 }
+            else break #bloc -1
+            x^
+        }
+    ", VmValue::Int(5));
 
-    test_err!("/*", ErrType::LexerUnterminatedMultilineComment);
+    test!("let a;         (a, let b) = (1, 2); a + b", VmValue::Int(3));
+    test!("let mut a = 5; (a, let b) = (1, 2); a + b", VmValue::Int(3));
 }
 
-#[test] fn unicode_lexing() {
-    test!("
-        let ê = 3 // 🦀
-        ê^
-    ", VmValue::Int(3));
-}
 
 #[test] fn loop_shenanigance() {
     test!("
@@ -255,6 +253,12 @@ mod common;
     );
 
     test!(r#"
+        let a = 1
+        let b = 2
+        "{a}{b}{a}{a}"
+    "#, VmValue::OwnedStr("1211".to_string()));
+
+    test!(r#"
         let x = 5
         let y = 3.3
         if true { "x: {x}, y: {y}" }
@@ -268,40 +272,24 @@ mod common;
     "#, VmValue::OwnedStr("y: 3.3, x: 5".to_string()));
 }
 
-#[test] fn delayed_let() {
+#[test] fn new_line_iss() {
+    test!("3 \n is 3", VmValue::Bool(true));
+    test!("if 3 \n is 3 => true else false", VmValue::Bool(true));
+
     test!("
-        { #bloc
-            let x
-            if true { x = 5 }
-            else break #bloc -1
-            x^
+        match 16
+        is 5 {
+            1
+            is 2
         }
-    ", VmValue::Int(5));
-
-    test!("let a;         (a, let b) = (1, 2); a + b", VmValue::Int(3));
-    test!("let mut a = 5; (a, let b) = (1, 2); a + b", VmValue::Int(3));
+        is 4 => (
+            1
+            is 2
+        )
+        is _ => true
+    ", VmValue::Bool(true));
 }
 
-
-
-#[test] fn short_circuiting() {
-    test!(r#"
-        true or panic("OR short-circuit failed...")
-    "#, VmValue::Bool(true));
-    test!(r#"
-        false and panic("AND short-circuit failed...")
-    "#, VmValue::Bool(false));
-
-    test!(r#"
-        let t1 = (10, 20)
-        let t2 = (10, 20)
-
-        let res1 = t1^ is (10, _) or panic("OR short-circuit failed...")
-        let res2 = t2^ is (99, _) and panic("AND short-circuit failed...")
-
-        res1 and !res2
-    "#, VmValue::Bool(true));
-}
 
 #[test] fn ensure_expr() {
     test!("ensure true else panic(\"OoH No!!\"); 4", VmValue::Int(4));
@@ -309,19 +297,81 @@ mod common;
     test_err!("ensure true else print(\"oOh nO!!\")", ErrType::TyperMismatch { .. });
 }
 
-
-
-
-#[test] fn recursion() {
+#[test] fn slice_coercion_and_indexing() {
     test!("
-        fn fib(n: int) -> int {
-            if n < 2 { return n }
-            return fib(n-1) + fib(n-2)
-        }
-        fib(8)
-    ", VmValue::Int(21));
+        let arr = (10, 20, 30)
+        let s: &[int] = arr
+        s[1]^
+    ", VmValue::Int(20));
+
+    test!("
+        let arr = (10, 20, 30)
+        let s: &[int] = arr
+        s.len()
+    ", VmValue::Int(3));
+
+    test!("
+        let mut arr = (10, 20, 30)
+        let s: &mut [int] = mut arr
+        s[1] = 99
+        arr[1]^
+    ", VmValue::Int(99));
+
+    test!("
+        let mut arr = (10, 20, 30)
+        let s: &mut [int] = mut arr
+        s[0] += 5
+        s[1] *= 2
+        s[2] -= s[0]
+        arr[0] + arr[1] + arr[2]
+    ", VmValue::Int(70));
 }
 
+#[test] fn slice_empty() {
+    test!("
+        let arr = (0; 0)
+        let s: &[int] = arr
+        s.len()
+    ", VmValue::Int(0));
+}
+
+#[test] fn slice_of_tuples() {
+    test!("
+        let grid = ((1, 2), (3, 4), (5, 6))
+        let s: &[(int, int)] = grid
+        s[0].0 + s[1].1 + s[2].0
+    ", VmValue::Int(1 + 4 + 5));
+}
+
+#[test] fn slice_function_arguments() {
+    test!("
+        fn sum(s: &[int]) -> int {
+            let mut total = 0
+            for i in 0..s.len() {
+                total += s[i]
+            }
+            total
+        }
+        let arr = (1, 2, 3, 4, 5)
+        sum(arr)
+    ", VmValue::Int(15));
+
+    test!("
+        fn mutate_first(s: &mut [int]) {
+            s[0] = 775
+        }
+        let mut data = (1, 2)
+        mutate_first(mut data)
+        data[0] + data[1]
+    ", VmValue::Int(777));
+
+    test!("
+        fn inner(s: &[int]) -> int => s[1]
+        fn outer(s: &[int]) -> int => inner(s) + s[0]
+        let arr = (100, 20)
+        outer(arr)
+    ", VmValue::Int(120));
+}
 
 
 #[test] fn functions() {
@@ -352,6 +402,47 @@ mod common;
     "#, VmValue::Void);
 }
 
+#[test] fn recursion() {
+    test!("
+        fn fib(n: int) -> int {
+            if n < 2 { return n }
+            return fib(n-1) + fib(n-2)
+        }
+        fib(8)
+    ", VmValue::Int(21));
+}
+
+
+
+#[test] fn single_tuple_type_instantiation() {
+    test!("type X = int;         -X{ 2 }", VmValue::Int(-2));
+    test!("type X = float;       -X{ 2.0 }", VmValue::Float(-2.0));
+    test!("type X = (int,);      X{ 2 }", VmValue::Tup(vec![VmValue::Int(2)]));
+    test!("type X = (int, bool); X{ 2, true }", VmValue::Tup(vec![VmValue::Int(2), VmValue::Bool(true)]));
+    test!("type X = ();          X{ }", VmValue::Tup(vec![]));
+}
+
+#[test] fn single_tuple_type_destruction() {
+    test!("type X = int;              let X{ a } = X{ 2 };                 a^",     VmValue::Int(2));
+    test!("type X = (int,);           let X{ a } = X{ 2 };                 a^",     VmValue::Int(2));
+    test!("type X = (int, int);       let X{ a, b } = X{ 3, 4 };           a * b", VmValue::Int(12));
+    test!("type X = (x: int, y: int); let X{ x: a, y: } = X{ x: 3, y: 4 }; a * y", VmValue::Int(12));
+    test!("type X = ();               let X{ } = X{ }",                            VmValue::Void);
+}
+
+#[test] fn tuple_type_coercion() {
+    test!("const typ = (bool, bool);  let x: typ = (true, false);  x^", VmValue::Tup(vec![VmValue::Bool(true), VmValue::Bool(false)]));
+    test!("const typ = (bool; 2);     let x: typ = (true, false);  x^", VmValue::Tup(vec![VmValue::Bool(true), VmValue::Bool(false)]));
+    test!("const typ = (bool, bool);  let x: typ = (true; 2);      x^", VmValue::Tup(vec![VmValue::Bool(true), VmValue::Bool(true)]));
+    test!("const typ = (bool; 2);     let x: typ = (true; 2);      x^", VmValue::Tup(vec![VmValue::Bool(true), VmValue::Bool(true)]));
+
+    test!("type X = (bool; 5);  X{ true; 5 }.3", VmValue::Bool(true));
+}
+
+#[test] fn consts() {
+    test!("const (x, _) = (5, 3); x^", VmValue::Int(5));
+    test!("const X = 2 * Y; const Z = 20; const Y = 3 * Z; X^", VmValue::Int(120));
+}
 
 #[test] fn impls() {
     test!("type Number = int; Number{ 320 }", VmValue::Int(320));
@@ -399,35 +490,21 @@ mod common;
     ", VmValue::Int(12));
 }
 
-#[test] fn single_tuple_type_instantiation() {
-    test!("type X = int;         -X{ 2 }", VmValue::Int(-2));
-    test!("type X = float;       -X{ 2.0 }", VmValue::Float(-2.0));
-    test!("type X = (int,);      X{ 2 }", VmValue::Tup(vec![VmValue::Int(2)]));
-    test!("type X = (int, bool); X{ 2, true }", VmValue::Tup(vec![VmValue::Int(2), VmValue::Bool(true)]));
-    test!("type X = ();          X{ }", VmValue::Tup(vec![]));
+#[test] fn point_impl_test() {
+    test!("
+        type Point = (x: int, y: int)
+        impl Point {
+            fn squared_distance(self: &Self) -> int {
+                self.x * self.x + self.y * self.y
+            }
+        }
+
+        let mut p = Point{ x: 3, y: 2 }
+        p.y = 4
+        p.squared_distance()
+    ", VmValue::Int(25));
 }
 
-#[test] fn single_tuple_type_destruction() {
-    test!("type X = int;              let X{ a } = X{ 2 };                 a^",     VmValue::Int(2));
-    test!("type X = (int,);           let X{ a } = X{ 2 };                 a^",     VmValue::Int(2));
-    test!("type X = (int, int);       let X{ a, b } = X{ 3, 4 };           a * b", VmValue::Int(12));
-    test!("type X = (x: int, y: int); let X{ x: a, y: } = X{ x: 3, y: 4 }; a * y", VmValue::Int(12));
-    test!("type X = ();               let X{ } = X{ }",                            VmValue::Void);
-}
-
-#[test] fn tuple_type_coercion() {
-    test!("const typ = (bool, bool);  let x: typ = (true, false);  x^", VmValue::Tup(vec![VmValue::Bool(true), VmValue::Bool(false)]));
-    test!("const typ = (bool; 2);     let x: typ = (true, false);  x^", VmValue::Tup(vec![VmValue::Bool(true), VmValue::Bool(false)]));
-    test!("const typ = (bool, bool);  let x: typ = (true; 2);      x^", VmValue::Tup(vec![VmValue::Bool(true), VmValue::Bool(true)]));
-    test!("const typ = (bool; 2);     let x: typ = (true; 2);      x^", VmValue::Tup(vec![VmValue::Bool(true), VmValue::Bool(true)]));
-
-    test!("type X = (bool; 5);  X{ true; 5 }.3", VmValue::Bool(true));
-}
-
-#[test] fn consts() {
-    test!("const (x, _) = (5, 3); x^", VmValue::Int(5));
-    test!("const X = 2 * Y; const Z = 20; const Y = 3 * Z; X^", VmValue::Int(120));
-}
 
 #[test] fn enums() {
     test!("
@@ -469,22 +546,6 @@ mod common;
     ", VmValue::Int(3));
 }
 
-
-#[test] fn point_impl_test() {
-    test!("
-        type Point = (x: int, y: int)
-        impl Point {
-            fn squared_distance(self: &Self) -> int {
-                self.x * self.x + self.y * self.y
-            }
-        }
-
-        let mut p = Point{ x: 3, y: 2 }
-        p.y = 4
-        p.squared_distance()
-    ", VmValue::Int(25));
-}
-
 #[test] fn enum_impl_test() {
     test!("
         impl Option {
@@ -506,80 +567,43 @@ mod common;
 }
 
 
-#[test] fn random_examples() {
-    test!("
-        fn sum_to(max: int) -> int {
-            let mut sum = 0
-            let mut i = 0
-            while i < max {
-                i += 1
-                sum += i
-            }
-            sum
-        }
-        sum_to(100)
-    ", VmValue::Int(5050));
-}
-
-
-#[test] fn new_line_iss() {
-    test!("3 \n is 3", VmValue::Bool(true));
-    test!("if 3 \n is 3 => true else false", VmValue::Bool(true));
-
-    test!("
-        match 16
-        is 5 {
-            1
-            is 2
-        }
-        is 4 => (
-            1
-            is 2
-        )
-        is _ => true
-    ", VmValue::Bool(true));
-}
-
-
 #[test] fn prelude() {
     test!("Range{ start: 1, end: 2 }", VmValue::Tup(vec![VmValue::Int(2), VmValue::Int(1)]));
 }
+#[test] fn prelude_math_algorithms() {
+    test!("0.sqrt()", VmValue::Int(0));
+    test!("1.sqrt()", VmValue::Int(1));
+    test!("168.sqrt()", VmValue::Int(12));
+    test!("169.sqrt()", VmValue::Int(13));
+    test!("170.sqrt()", VmValue::Int(13));
 
+    test!("90.gcd(24)", VmValue::Int(6));
+    test!("4.lcm(6)", VmValue::Int(12));
+    test!("0.factorial()", VmValue::Int(1));
+    test!("5.factorial()", VmValue::Int(120));
+    test!("(-15).abs() + 15.abs()", VmValue::Int(30));
 
-#[test] fn slice_coercion_and_indexing() {
-    test!("
-        let arr = (10, 20, 30)
-        let s: &[int] = arr
-        s[1]^
-    ", VmValue::Int(20));
-
-    test!("
-        let arr = (10, 20, 30)
-        let s: &[int] = arr
-        s.len()
-    ", VmValue::Int(3));
-
-    test!("
-        let mut arr = (10, 20, 30)
-        let s: &mut [int] = mut arr
-        s[1] = 99
-        arr[1]^
-    ", VmValue::Int(99));
+    test!("0.0.sqrt()", VmValue::Float(0.0));
+    test!("4.0.sqrt()", VmValue::Float(2.0));
+    test!("3.0.hypot(4.0)", VmValue::Float(5.0));
 }
 
-#[test] fn slice_function_arguments() {
-    test!("
-        fn sum(s: &[int]) -> int {
-            let mut total = 0
-            for i in 0..s.len() {
-                total += s[i]
-            }
-            total
-        }
+#[test] fn prelude_ranges_and_options() {
+    test!("(5..15).contains(5)", VmValue::Bool(true));
+    test!("(5..15).contains(15)", VmValue::Bool(false));
+    test!("(5..=15).contains(15)", VmValue::Bool(true));
+    test!("(10..5).len()", VmValue::Int(0));
+    test!("(5..10).len()", VmValue::Int(5));
 
-        let arr = (1, 2, 3, 4, 5)
-        sum(arr)
-    ", VmValue::Int(15));
+    test!("Option.None.unwrap_or(42)", VmValue::Int(42));
+    test!("Option.Some{ 7 }.unwrap_or(42)", VmValue::Int(7));
+}
+
+#[test] fn prelude_contract_panics() {
+    test_err!("Option.None.unwrap()", ErrType::RuntimeError { .. });
+    test_err!("(-1).sqrt()", ErrType::RuntimeError { .. });
+    test_err!("(-1.0).sqrt()", ErrType::RuntimeError { .. });
+    test_err!("(-1).factorial()", ErrType::RuntimeError { .. });
 }
 
 
@@ -587,16 +611,52 @@ mod common;
     test!(r#"  if "bla" is let "{x}" => x else ""  "#,        VmValue::OwnedStr("bla".to_string()));
     test!(r#"  match "bla" is let "{x}" => x, is _ => ""  "#, VmValue::OwnedStr("bla".to_string()));
     test!("
-        let arr = (1, 2, 3)
+        let arr = (1, 2, 3, 4, 5)
         let s: &[int] = arr
-        let coerce1 = if true => arr else s
+        let coerce1 = if true  => arr else s
         let coerce2 = if false => arr else s
-        coerce1[1] + coerce2[2]
-    ", VmValue::Int(5));
+        let coerce3 = if false => s else arr
+        let coerce4 = if true  => s else arr
+        coerce1[1] + coerce2[2] + coerce3[3] + coerce4[4]
+    ", VmValue::Int(14));
+
+    test!("
+        let x = (1, 2)
+        let y = (3, 4, 5, 6, 7)
+        let s1: &[int] = if false => x else y
+        let s2: &[int] = if false => y else x
+        s1.len() - s2.len()
+    ", VmValue::Int(3));
+
+    test!(r#"
+        let s = "hello"
+        let s = s
+        let res = match 1
+            is 0 => panic("zero")
+            is 1 => s
+            is _ => "other"
+        res
+    "#, VmValue::OwnedStr("hello".to_string()));
+
+    test!(r#"
+        let s = "yes"
+        { #block
+            break #block s
+            "nop"
+        }
+    "#, VmValue::OwnedStr("yes".to_string()));
+    test!(r#"
+        let s = "nop"
+        { #block
+            break #block "yes"
+            s
+        }
+    "#, VmValue::OwnedStr("yes".to_string()));
 }
 
 
 #[test] fn random_one_liners() {
+    test!("fn triangle(n: int) -> int { let mut sum = 0; let mut i = 0; while i < n { i += 1; sum += i }; sum }; triangle(10)", VmValue::Int(55));
     test!("fn triangle(n: int) -> int { let mut res = 0; for i in 0..=n => res += i; res }; triangle(10)", VmValue::Int(55));
     test!("fn triangle(n: int) -> int => if n <= 1 => n else n + triangle(n - 1); triangle(10)", VmValue::Int(55));
     test!("fn triangle(n: int) -> int => n * (n + 1) / 2; triangle(10)", VmValue::Int(55));

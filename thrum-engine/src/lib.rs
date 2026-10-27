@@ -136,6 +136,9 @@ pub enum ErrType {
     TyperCantUseMaybeMovedVar { var: TypeVar },
     #[display("Can't use {var} because it was moved.")]
     TyperCantUseMovedVar { var: TypeVar },
+
+    #[display("Can't mutate through immutable pointer: {typ}")]
+    TyperCantMutateThroughImmutPointer { typ: String },
     #[display("Can't dereference non-pointer type: {typ}")]
     TyperCantDerefNonPointerType { typ: String, },
     #[display("Can't deref a non local pointer.")]

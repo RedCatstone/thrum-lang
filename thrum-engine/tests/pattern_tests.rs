@@ -224,6 +224,15 @@ mod common;
     ", VmValue::Bool(true));
 }
 
+#[test] fn enum_pattern_preserves_ownership() {
+    test!("
+        let opt = Option.Some{ 50 }
+        let a = if opt is :Some{ let x } => x^ else 0
+        let b = if opt is :Some{ let y } => y^ else 0
+        a + b
+    ", VmValue::Int(100));
+}
+
 
 #[test] fn new_type_pattern() {
     test!("

@@ -249,7 +249,9 @@ impl TypeChecker<'_> {
 
                 // all shall become target.
                 for &(expr, _) in &active {
-                    self.coerce_to_expected_type(expr, target);
+                    let coerced = self.coerce_to_expected_type(expr, target);
+                    let expr_span = self.ast.get_expr_span(expr);
+                    self.unify_types(target, coerced, expr_span, UnifyMode::Subtype);
                 }
 
                 target
