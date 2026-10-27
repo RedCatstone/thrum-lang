@@ -573,7 +573,7 @@ impl VmCompiler<'_> {
                     match self.ast.get_pattern(*pattern) {
                         Pattern::PlacePointer(expr) => {
                             self.compile_expression(*expr);
-                            self.push_op(OpCode::PointerGetMove);
+                            self.push_op(OpCode::PointerGetClone);
                         }
                         _ => unreachable!("Infix assignments are only allowed for place patterns.")
                     }

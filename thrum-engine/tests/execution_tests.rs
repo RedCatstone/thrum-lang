@@ -71,6 +71,8 @@ mod common;
         (_, a) = (a, 5*a)
         a^
     ", VmValue::Int(5));
+
+    test!("let mut x = 5; x *= 2; x *= x; x", VmValue::Int(100));
 }
 
 
@@ -609,7 +611,15 @@ mod common;
     "#, VmValue::Tup(vec![VmValue::OwnedStr("https".to_string()), VmValue::OwnedStr("youtu.be".to_string()), VmValue::OwnedStr("dQw4w9WgXcQ".to_string())]));
 
     test!("
-        fn is_prime(n: int) -> bool { for d in 2..n => if n % d == 0 => return false; n >= 2 }
-        let mut count = 0; for i in 0..10 => if is_prime(i) => count += 1; count
-    ", VmValue::Int(4));
+        fn is_prime(n: int) -> bool {
+            for d in 2..n {
+                if n / d < d => break  // optimization
+                if n % d is 0 => return false
+            }
+            n >= 2
+        }
+        let mut count = 0
+        for i in 0..50 => if is_prime(i) => count += 1
+        count
+    ", VmValue::Int(15));
 }

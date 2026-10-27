@@ -19,10 +19,56 @@ impl int {
     fn min(self: Self, other: Self) -> Self => if self < other { self } else { other }
     fn max(self: Self, other: Self) -> Self => if self > other { self } else { other }
     fn clamp(self: Self, min: Self, max: Self) -> Self => self.max(min).min(max)
-    fn pow(self: Self, p: Self) -> Self => {
-        let mut total = 1;
-        for _ in 0..p => total *= self
+
+    fn abs(self: Self) -> Self => if self < 0 => -self else self
+    fn signum(self: Self) -> Self => if self < 0 => -1 else if self > 0 => 1 else 0
+
+    fn is_even(self: Self) -> bool => self % 2 is 0
+    fn is_odd(self: Self) -> bool => self % 2 is 1
+    fn is_multiple_of(self: Self, of: int) -> bool => self % of is 0
+
+    fn pow(mut self: Self, mut exp: Self) -> Self {
+        if exp < 0 => panic("cannot compute negative integer power")
+        let mut total = 1
+        while exp > 0 {
+            if exp % 2 is 1 => total *= self
+            self *= self
+            exp /= 2
+        }
         total
+    }
+
+    fn sqrt(self: Self) -> Self {
+        // Newton's method
+        if self < 0 => panic("cannot compute sqrt of negative integer")
+        if self <= 1 => self
+        else {
+            let mut x0 = self / 2
+            let mut x1 = (x0 + self / x0) / 2
+            while x1 < x0 {
+                x0 = x1
+                x1 = (x1 + self / x1) / 2
+            }
+            x0
+        }
+    }
+
+    fn lcm(self: Self, other: Self) -> Self => (self * other).abs() / self.gcd(other)
+    fn gcd(self: Self, other: Self) -> Self {
+        // Euclidean Algorithm
+        let mut a = self.abs()
+        let mut b = other.abs()
+        while b is! 0 {
+            (a, b) = (b, a % b)
+        }
+        a
+    }
+
+    fn factorial(self: Self) -> Self {
+        if self < 0 => panic("cannot compute factorial of negative integer")
+        let mut res = 1
+        for i in 2..=self => res *= i
+        res
     }
 }
 
@@ -31,6 +77,24 @@ impl float {
     fn min(self: Self, other: Self) -> Self => if self < other { self } else { other }
     fn max(self: Self, other: Self) -> Self => if self > other { self } else { other }
     fn clamp(self: Self, min: Self, max: Self) -> Self => self.max(min).min(max)
+
+    fn abs(self: Self) -> Self => if self < 0.0 => -self else self
+    fn signum(self: Self) -> Self => if self < 0.0 => -1.0 else if self > 0.0 => 1.0 else 0.0
+
+    fn hypot(self: Self, other: Self) -> Self => (self * self + other * other).sqrt()
+
+    fn sqrt(self: Self) -> Self {
+        if self < 0.0 => panic("cannot compute sqrt of negative float")
+        if self is 0.0 => 0.0
+        else {
+            let mut x = self / 2.0
+            if x is 0.0 => x = 1.0
+            for _ in 0..16 {
+                x = (x + self / x) / 2.0
+            }
+            x
+        }
+    }
 }
 
 
@@ -40,12 +104,16 @@ type RangeInclusive = (start: int, end: int);
 type RangeIter = (curr: int, end: int, extra: bool);
 
 impl Range {
+    fn contains(self: Self, val: int) -> bool => self.start <= val and val < self.end
+    fn len(self: Self) -> int => (self.end - self.start).max(0)
     fn iter(self: Self) -> RangeIter {
         RangeIter{ curr: self.start, end: self.end, extra: true }
     }
 }
 
 impl RangeInclusive {
+    fn contains(self: Self, val: int) -> bool => self.start <= val and val <= self.end
+    fn len(self: Self) -> int => (self.end - self.start + 1).max(0)
     fn iter(self: Self) -> RangeIter {
         RangeIter{ curr: self.start, end: self.end, extra: false }
     }

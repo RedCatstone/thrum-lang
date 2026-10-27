@@ -1,6 +1,6 @@
 // run me by doing `cargo run Code.thrum`
 
 
-match "bla"
-is let "{x}" => x
-is _ => "none"
+let mut x = 5
+x *= x
+x
