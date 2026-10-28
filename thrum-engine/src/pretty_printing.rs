@@ -106,11 +106,11 @@ impl AstArena {
             Expr::IdentifierRef { name, mutable } => writeln!(s, " - {}\"{name}\"", if *mutable {"mut "} else {""}),
 
             Expr::Prefix { op, right, .. } => {
-                writeln!(s, " - {op}")?;
+                writeln!(s, " - {op:?}")?;
                 self.format_expr_recursive(*right, s, ind + 1, "right", true)
             }
             Expr::Infix { op, left, right, .. } => {
-                writeln!(s, " - {op}")?;
+                writeln!(s, " - {op:?}")?;
                 self.format_expr_recursive(*left, s, ind + 1, "left", false)?;
                 self.format_expr_recursive(*right, s, ind + 1, "right", true)
             }

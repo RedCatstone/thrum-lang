@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 
 use crate::{
-    ErrType, lexing::tokens::{AssignOp, Span, TokenKind}, nativelib, parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumId, Lifetime, ResolvedMemberAccess, ResolvedTypeInstantiation, TupMode, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternCtx, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, PatternOrVarId, TypeVarConstVal}}, vm_compiling::{NumMode, VmValue}
+    ErrType,
+    lexing::tokens::Span, nativelib,
+    parsing::ast::{AstClosure, AstEnumExpression, AstTupleElement, AstValue, BinOp, Expr, ExprId, PatternId, UnaryOp},
+    typing::{CustomTypeId, EnumId, Lifetime, ResolvedMemberAccess, ResolvedTypeInstantiation, TupMode, Type, TypeChecker, TypeId, TypeTuple, TypeVarId, UnifyMode, check_patterns::CheckPatternCtx, coercion::AutoDerefMode, exhaustiveness::PatternSpace, type_vars::{DefineVarMode, DefineVarScope, PatternOrVarId, TypeVarConstVal}},
+    vm_compiling::{NumMode, VmValue}
 };
 
 
@@ -233,18 +237,17 @@ impl TypeChecker<'_> {
 
             Expr::Prefix { op, right } => {
                 match op {
-                    TokenKind::Exclamation => self.check_expression(*right, is_never, ctx.expect(TypeId::BOOL)),
-                    TokenKind::Op(AssignOp::Minus) => {
+                    UnaryOp::Not => self.check_expression(*right, is_never, ctx.expect(TypeId::BOOL)),
+                    UnaryOp::Negative => {
                         let right_type = self.check_expression(*right, is_never, ctx.auto_deref(AutoDerefMode::Fully));
                         self.check_prefix_minus(right_type, span, check_expr)
                     }
-                    _ => unreachable!("Unsupported prefix op: {op} (Parser Issue)")
                 }
             }
 
             Expr::Infix { op, op_span, left, right } => {
                 let infix_ctx = ctx
-                    .allow_is_bindings(*op == TokenKind::And && old_ctx.allow_is_expr_bindings)
+                    .allow_is_bindings(*op == BinOp::And && old_ctx.allow_is_expr_bindings)
                     .auto_deref(AutoDerefMode::Fully);
 
                 let left_type = self.check_expression(*left, is_never, infix_ctx);
@@ -252,7 +255,7 @@ impl TypeChecker<'_> {
                 // because of short-circuiting right is not always evaluated, meaning that a Never-expr might not trigger
                 let right_is_never = &mut false;
                 let right_type = self.check_expression(*right, right_is_never, infix_ctx);
-                if *right_is_never && !matches!(op, TokenKind::And | TokenKind::Or) { *is_never = true; }
+                if *right_is_never && !matches!(op, BinOp::And | BinOp::Or) { *is_never = true; }
 
                 self.check_infix(*op, *op_span, left_type, right_type, check_expr)
             }
@@ -354,7 +357,7 @@ impl TypeChecker<'_> {
                 );
 
                 if let Some(extra_op) = extra_op {
-                    let infixed_typ = self.check_infix(TokenKind::Op(*extra_op), *op_span, value_type, value_type, check_expr);
+                    let infixed_typ = self.check_infix(*extra_op, *op_span, value_type, value_type, check_expr);
                     self.unify_types(value_type, infixed_typ, *op_span, UnifyMode::Subtype);
                 }
                 TypeId::VOID
@@ -607,7 +610,7 @@ impl TypeChecker<'_> {
     }
 
 
-    fn check_infix(&mut self, op: TokenKind, op_span: Span, left: TypeId, right: TypeId, expr_id: ExprId) -> TypeId {
+    fn check_infix(&mut self, op: BinOp, op_span: Span, left: TypeId, right: TypeId, expr_id: ExprId) -> TypeId {
         // for now left and right have to be the same type, so just unify them.
         self.unify_types(left, right, op_span, UnifyMode::Subtype);
 
@@ -628,12 +631,11 @@ impl TypeChecker<'_> {
         }
 
         match op {
-            TokenKind::EqualEqual | TokenKind::Greater | TokenKind::Less /*| TokenType::GreaterEqual | TokenType::LessEqual */
-            | TokenKind::And | TokenKind::Or => {
+            BinOp::Equal | BinOp::Greater | BinOp::Less | BinOp::And | BinOp::Or => {
                 TypeId::BOOL
             }
 
-            TokenKind::Op(AssignOp::Plus | AssignOp::Minus | AssignOp::Star | AssignOp::Slash | AssignOp::Percent) => {
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => {
                 let mode = match left_type {
                     Type::NumFloat => NumMode::Float,
                     Type::NumInt => NumMode::Int,
@@ -643,7 +645,7 @@ impl TypeChecker<'_> {
                 self.typed_ast.resolved_num_mode.insert(expr_id, mode);
                 left
             }
-            _ => unreachable!("Unsupported infix operator: {:?}", op)
+            BinOp::NotEqual | BinOp::LessEqual | BinOp::GreaterEqual => unreachable!("op should've been desugared... {op:?}"),
         }
     }
 

@@ -1,6 +1,6 @@
 use crate::{
     ErrType, ProgramError, ProgramErrorData, WarnType,
-    lexing::{self, tokens::{AssignOp, Span, TokenKind, TokenSpan}},
+    lexing::{self, tokens::{Span, TokenKind, TokenSpan}},
     parsing::{ast::{AstArena, Expr, ExprId, Pattern, PatternId},
     parse_expressions::{AllowStmt, ParserCtx, Precedence}}
 };
@@ -209,7 +209,7 @@ impl<'a> Parser<'a> {
     fn peek_is_expression_start(&self) -> bool {
         // should match self.parse_prefix()
         matches!(self.peek().token,
-            TokenKind::Exclamation | TokenKind::Op(AssignOp::Minus | AssignOp::Star) | TokenKind::Identifier
+            TokenKind::Exclamation | TokenKind::Minus | TokenKind::Asterisk | TokenKind::Identifier
             | TokenKind::Mut | TokenKind::NumInt | TokenKind::NumFloat | TokenKind::Bool(_)
             | TokenKind::LeftBrace | TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::StringStart
             | TokenKind::Let | TokenKind::Const | TokenKind::Type

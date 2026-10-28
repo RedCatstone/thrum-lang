@@ -1,4 +1,4 @@
-use crate::{lexing::tokens::TokenKind, parsing::ast::{AstArena, AstTuplePattern, Expr, Pattern}};
+use crate::parsing::ast::{AstArena, AstTuplePattern, BinOp, Expr, Pattern, UnaryOp};
 
 
 
@@ -90,13 +90,13 @@ pub fn desugar_after_parsing(ast: &mut AstArena) {
 
             Expr::Infix { op, op_span, left, right }
             if let Some(inverted_op) = match op {
-                TokenKind::NotEqual => Some(TokenKind::EqualEqual), // desugar `a != b`  -->  `!(a == b)`
-                TokenKind::LessEqual => Some(TokenKind::Greater),   // desugar `a <= b`  -->  `!(a > b)`
-                TokenKind::GreaterEqual => Some(TokenKind::Less),   // desugar `a >= b`  -->  `!(a < b)`
+                BinOp::NotEqual => Some(BinOp::Equal), // desugar `a != b`  -->  `!(a == b)`
+                BinOp::LessEqual => Some(BinOp::Greater),   // desugar `a <= b`  -->  `!(a > b)`
+                BinOp::GreaterEqual => Some(BinOp::Less),   // desugar `a >= b`  -->  `!(a < b)`
                 _ => None
             } => {
                 ast.exprs[i] = Expr::Prefix {
-                    op: TokenKind::Exclamation,
+                    op: UnaryOp::Not,
                     right: expr!(span, Expr::Infix { op: inverted_op, op_span, left, right })
                 };
             }

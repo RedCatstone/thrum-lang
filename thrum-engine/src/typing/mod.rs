@@ -381,7 +381,7 @@ impl TypeChecker<'_> {
     #[track_caller]
     pub fn unify_types(&mut self, expected: TypeId, other: TypeId, span: Span, mode: UnifyMode) -> TypeId {
         let mut mismatch = false;
-        let result = self.internal_unify_types(expected, other, span, mode, &mut mismatch);
+        let result = self.internal_unify_types(expected, other, mode, &mut mismatch);
         if mismatch {
             // with this mismatch flag, each unify can only trigger one error
             self.type_mismatch(expected, other, span);
@@ -390,7 +390,7 @@ impl TypeChecker<'_> {
     }
 
     #[track_caller]
-    fn internal_unify_types(&mut self, expected: TypeId, other: TypeId, span: Span, mode: UnifyMode, mismatch: &mut bool) -> TypeId {
+    fn internal_unify_types(&mut self, expected: TypeId, other: TypeId, mode: UnifyMode, mismatch: &mut bool) -> TypeId {
         let id_a = self.prune_id_once(expected);
         let id_b = self.prune_id_once(other);
 
@@ -414,18 +414,18 @@ impl TypeChecker<'_> {
             if let len = mode_a.len() && len == mode_b.len() => {
 
                 if let (&TupMode::Arr(inner_a, _), &TupMode::Arr(inner_b, _)) = (&mode_a, &mode_b) {
-                    let merged = self.internal_unify_types(inner_a, inner_b, span, mode, mismatch);
+                    let merged = self.internal_unify_types(inner_a, inner_b, mode, mismatch);
                     self.type_arena.add_type(Type::Tup(TupMode::Arr(merged, len)))
                 }
                 else {
                     let mut new_elems = Vec::with_capacity(len);
 
                     for i in 0..len {
-                        let (label_a, typ_a) = mode_a.get(i);
-                        let (label_b, typ_b) = mode_b.get(i);
+                        let (label_a, type_a) = mode_a.get(i);
+                        let (label_b, type_b) = mode_b.get(i);
 
                         new_elems.push(TypeTuple {
-                            typ: self.internal_unify_types(typ_a, typ_b, span, mode, mismatch),
+                            typ: self.internal_unify_types(type_a, type_b, mode, mismatch),
                             label: match (label_a, label_b) {
                                 (Some(a), Some(b)) => {
                                     if a != b {
@@ -446,14 +446,14 @@ impl TypeChecker<'_> {
 
 
             (Type::Slice(inner_a), Type::Slice(inner_b)) => {
-                let merged = self.internal_unify_types(inner_a, inner_b, span, mode, mismatch);
+                let merged = self.internal_unify_types(inner_a, inner_b, mode, mismatch);
                 self.type_arena.add_type(Type::Slice(merged))
             }
 
 
             (Type::CustomType(id_a, inner_a), Type::CustomType(id_b, inner_b))
             if id_a == id_b => {
-                let merged_inner = self.internal_unify_types(inner_a, inner_b, span, mode, mismatch);
+                let merged_inner = self.internal_unify_types(inner_a, inner_b, mode, mismatch);
                 self.type_arena.add_type(Type::CustomType(id_a, merged_inner))
 
                 // Different custom_id => they can't unify
@@ -466,7 +466,7 @@ impl TypeChecker<'_> {
 
             (Type::EnumVariant { inner: inner_a, variant: variant_a },
             Type::EnumVariant { inner: inner_b, variant: variant_b }) => {
-                let merged_inner = self.internal_unify_types(inner_a, inner_b, span, mode, mismatch);
+                let merged_inner = self.internal_unify_types(inner_a, inner_b, mode, mismatch);
 
                 if variant_a == variant_b {
                     self.type_arena.add_type(Type::EnumVariant { inner: merged_inner, variant: variant_a })
@@ -482,11 +482,11 @@ impl TypeChecker<'_> {
             }
 
             // this direction is always allowed regardless of mode
-            (_, Type::EnumVariant { inner, .. }) => self.internal_unify_types(id_a, inner, span, mode, mismatch),
+            (_, Type::EnumVariant { inner, .. }) => self.internal_unify_types(id_a, inner, mode, mismatch),
             (Type::EnumVariant { inner, .. }, _) => {
                 // this direction is only allowed in LUB mode
                 match mode {
-                    UnifyMode::FindParentType => self.internal_unify_types(inner, id_b, span, mode, mismatch),
+                    UnifyMode::FindParentType => self.internal_unify_types(inner, id_b, mode, mismatch),
                     UnifyMode::Subtype => {
                         *mismatch = true;
                         TypeId::ERROR
@@ -498,7 +498,7 @@ impl TypeChecker<'_> {
 
             (Type::Borrow { mutable: mut_a, inner: inner_a, lifetime: life_a },
             Type::Borrow { mutable: mut_b, inner: inner_b, lifetime: life_b }) => {
-                let new_inner = self.internal_unify_types(inner_a, inner_b, span, mode, mismatch);
+                let new_inner = self.internal_unify_types(inner_a, inner_b, mode, mismatch);
                 if mut_a != mut_b {
                     *mismatch = true;
                 }
@@ -513,9 +513,9 @@ impl TypeChecker<'_> {
                 }
                 let mut new_params = Vec::new();
                 for (ia, ib) in params_a.into_iter().zip(params_b) {
-                    new_params.push(self.internal_unify_types(ib, ia, span, mode, mismatch));
+                    new_params.push(self.internal_unify_types(ib, ia, mode, mismatch));
                 }
-                let new_return = self.internal_unify_types(return_a, return_b, span, mode, mismatch);
+                let new_return = self.internal_unify_types(return_a, return_b, mode, mismatch);
 
                 self.type_arena.add_type(Type::Fn { param_types: new_params, return_type: new_return })
             }

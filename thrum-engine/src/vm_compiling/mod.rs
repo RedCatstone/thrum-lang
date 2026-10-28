@@ -4,9 +4,8 @@ use std::collections::HashMap;
 use derive_more::Display;
 
 use crate::{
-    ErrType,
-    lexing::tokens::{AssignOp, TokenKind},
-    nativelib, parsing::ast::{AstArena, AstValue, Expr, ExprId, Pattern, PatternId},
+    ErrType, nativelib,
+    parsing::ast::{AstArena, AstValue, BinOp, Expr, ExprId, Pattern, PatternId, UnaryOp},
     pretty_printing::slice_to_string,
     typing::{ResolvedMemberAccess, ResolvedTypeInstantiation, TypeArena, TypeId, TypeVarId, TypedAst, type_vars::TypeVarConstVal},
     vm_evaluating
@@ -167,7 +166,7 @@ impl VmValue {
         }
     }
 
-    pub fn val_to_string(val: &Self) -> String {
+    #[must_use] pub fn val_to_string(val: &Self) -> String {
         match val {
             Self::OwnedStr(str) => str.clone(),
             Self::Slice(slice) => format!("{:?}", slice.as_bytes()),
@@ -577,7 +576,7 @@ impl VmCompiler<'_> {
                         }
                         _ => unreachable!("Infix assignments are only allowed for place patterns.")
                     }
-                    self.compile_infix(TokenKind::Op(*extra_op), *value, compile_expr);
+                    self.compile_infix(*extra_op, *value, compile_expr);
                 } else {
                     // push value to the stack
                     self.compile_expression(*value);
@@ -1251,8 +1250,8 @@ impl VmCompiler<'_> {
 
 
 
-    fn compile_infix(&mut self, operator: TokenKind, right: ExprId, expr_id: ExprId) {
-        if TokenKind::EqualEqual == operator {
+    fn compile_infix(&mut self, operator: BinOp, right: ExprId, expr_id: ExprId) {
+        if BinOp::Equal == operator {
             // this works regardless of any type
             self.compile_expression(right);
             self.push_op(OpCode::CmpEqual);
@@ -1262,7 +1261,7 @@ impl VmCompiler<'_> {
         // short circuiting operators,
         // they need to compile `right` later.
         match operator {
-            TokenKind::And => {
+            BinOp::And => {
                 // evaluate left
                 // left is true => discard it and return right
                 // left is false => return false
@@ -1276,7 +1275,7 @@ impl VmCompiler<'_> {
                 self.patch_jump_op_to_here(jump_to_end);
                 return
             }
-            TokenKind::Or => {
+            BinOp::Or => {
                 // evaluate left
                 // left is true => return true
                 // left is false => discard it and return right
@@ -1300,28 +1299,27 @@ impl VmCompiler<'_> {
         let num_mode = *self.typed_ast.resolved_num_mode.get(&expr_id).unwrap_or(&NumMode::Int);
 
         match operator {
-            TokenKind::Op(AssignOp::Plus) => self.push_op(OpCode::NumAdd { num_mode }),
-            TokenKind::Op(AssignOp::Minus) => self.push_op(OpCode::NumSubtract { num_mode }),
-            TokenKind::Op(AssignOp::Star) => self.push_op(OpCode::NumMultiply { num_mode }),
-            TokenKind::Op(AssignOp::Slash) => self.push_op(OpCode::NumDivide { num_mode }),
-            TokenKind::Op(AssignOp::Percent) => self.push_op(OpCode::NumModulo { num_mode }),
-            TokenKind::Less => self.push_op(OpCode::CmpLess),
-            TokenKind::Greater => self.push_op(OpCode::CmpGreater),
+            BinOp::Add => self.push_op(OpCode::NumAdd { num_mode }),
+            BinOp::Sub => self.push_op(OpCode::NumSubtract { num_mode }),
+            BinOp::Mul => self.push_op(OpCode::NumMultiply { num_mode }),
+            BinOp::Div => self.push_op(OpCode::NumDivide { num_mode }),
+            BinOp::Rem => self.push_op(OpCode::NumModulo { num_mode }),
+            BinOp::Less => self.push_op(OpCode::CmpLess),
+            BinOp::Greater => self.push_op(OpCode::CmpGreater),
 
-            _ => unreachable!("Unsupported operator: {operator}")
+            _ => unreachable!("Unsupported operator: {operator:?}")
         }
     }
 
-    fn compile_prefix(&mut self, operator: TokenKind, right: ExprId, expr_id: ExprId) {
+    fn compile_prefix(&mut self, operator: UnaryOp, right: ExprId, expr_id: ExprId) {
         self.compile_expression(right);
 
         match operator {
-            TokenKind::Exclamation => self.push_op(OpCode::BoolNegate),
-            TokenKind::Op(AssignOp::Minus) => {
+            UnaryOp::Not => self.push_op(OpCode::BoolNegate),
+            UnaryOp::Negative => {
                 let num_mode = *self.typed_ast.resolved_num_mode.get(&expr_id).unwrap_or(&NumMode::Int);
                 self.push_op(OpCode::NumNegate { num_mode });
             }
-            _ => unreachable!("unsupported prefix operator...")
         }
     }
 

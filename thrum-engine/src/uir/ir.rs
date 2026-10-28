@@ -1,5 +1,5 @@
 use crate::{
-    parsing::ast::{AstIds, AstValue}, typing::{EnumId, TypeId}, vm_compiling::VmFormatArgDisplayFn,
+    parsing::ast::{AstIds, AstValue, BinOp, UnaryOp}, typing::{EnumId, TypeId}, vm_compiling::VmFormatArgDisplayFn,
 };
 
 
@@ -222,30 +222,6 @@ pub enum RValue {
     MakeSlice { ptr: Operand, len: Operand },
     GetLen(Place),
     Cast { operand: Operand, target_type: TypeId },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BinOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    BitAnd,
-    BitOr,
-    BitXor,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum UnaryOp {
-    Neg,
-    Not,
 }
 
 #[derive(Debug, Clone, PartialEq)]

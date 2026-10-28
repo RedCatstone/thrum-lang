@@ -1,8 +1,7 @@
 use crate::{
-    ErrType,
-    uir::ir::{
-        BinOp, BlockId, Constant, FunctionId, Operand, Place, Projection, RValue,
-        Statement, Terminator, UirFunction, UnaryOp,
+    ErrType, parsing::ast::{BinOp, UnaryOp}, uir::ir::{
+        BlockId, Constant, FunctionId, Operand, Place, Projection, RValue,
+        Statement, Terminator, UirFunction,
     },
 };
 
@@ -99,17 +98,17 @@ impl<'a> UirRunner<'a> {
                                     None => return Err(ErrType::RuntimeError { msg: "division by zero".into() })
                                 }
                             }
-                            BinOp::Eq => i64::from(a == b),
-                            BinOp::Ne => i64::from(a != b),
-                            BinOp::Lt => i64::from(a < b),
-                            BinOp::Le => i64::from(a <= b),
-                            BinOp::Gt => i64::from(a > b),
-                            BinOp::Ge => i64::from(a >= b),
+                            BinOp::Equal => i64::from(a == b),
+                            BinOp::NotEqual => i64::from(a != b),
+                            BinOp::Less => i64::from(a < b),
+                            BinOp::LessEqual => i64::from(a <= b),
+                            BinOp::Greater => i64::from(a > b),
+                            BinOp::GreaterEqual => i64::from(a >= b),
                             _ => todo!("BinOp {op:?} not implemented yet"),
                         };
                         self.write_int(dest_offset, res);
                     }
-                    RValue::UnaryOp(UnaryOp::Neg, op) => {
+                    RValue::UnaryOp(UnaryOp::Negative, op) => {
                         let a = self.eval_operand_int(op);
                         self.write_int(dest_offset, -a);
                     }

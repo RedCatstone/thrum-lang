@@ -1,5 +1,5 @@
 use strum_macros::IntoStaticStr;
-use crate::lexing::tokens::{AssignOp, Span, TokenKind};
+use crate::lexing::tokens::{Span, TokenKind};
 
 pub type AstIds = u32;
 
@@ -47,12 +47,12 @@ impl AstArena {
 #[derive(Debug, IntoStaticStr, Clone)]
 pub enum Expr {
     Literal { val: AstValue },  // 2, "bla", true
-    Prefix { op: TokenKind, right: ExprId },  // !a
-    Infix  { op: TokenKind, op_span: Span, left: ExprId, right: ExprId },  // a + b
+    Prefix { op: UnaryOp, right: ExprId },  // !a
+    Infix  { op: BinOp, op_span: Span, left: ExprId, right: ExprId },  // a + b
 
     Block { exprs: Vec<ExprId>, label: Option<String> },  // { ... }
     IdentifierRef { name: String, mutable: bool },  // x  or  mut x
-    Assign { pattern: PatternId, value: ExprId, extra_op: Option<AssignOp>, op_span: Span }, // x = 2  or  let x = 2
+    Assign { pattern: PatternId, value: ExprId, extra_op: Option<BinOp>, op_span: Span }, // x = 2  or  let x = 2
     EmptyLet { pattern: PatternId },  // let x
     Const { pattern: PatternId, value: ExprId },  // const x = 5
     CustomType { name: Box<str>, value: ExprId },  // type x = 5
@@ -93,6 +93,61 @@ pub enum Expr {
     ParserError,  // desugar and typechecking will just ignore these nodes
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BinOp {
+    Add, Sub, Mul, Div, Rem,
+    Equal, NotEqual,
+    Less, LessEqual,
+    Greater, GreaterEqual,
+    And, Or,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnaryOp {
+    Negative,
+    Not,
+}
+
+impl BinOp {
+    #[must_use] pub const fn from_tokenkind(kind: TokenKind) -> Option<Self> {
+        match kind {
+            TokenKind::Plus => Some(Self::Add),
+            TokenKind::Minus => Some(Self::Sub),
+            TokenKind::Asterisk => Some(Self::Mul),
+            TokenKind::Slash => Some(Self::Div),
+            TokenKind::Percent => Some(Self::Rem),
+            TokenKind::EqualEqual => Some(Self::Equal),
+            TokenKind::NotEqual => Some(Self::NotEqual),
+            TokenKind::Less => Some(Self::Less),
+            TokenKind::LessEqual => Some(Self::LessEqual),
+            TokenKind::Greater => Some(Self::Greater),
+            TokenKind::GreaterEqual => Some(Self::GreaterEqual),
+            TokenKind::And => Some(Self::And),
+            TokenKind::Or => Some(Self::Or),
+            _ => None
+        }
+    }
+    #[must_use] pub const fn assign_op_from_tokenkind(kind: TokenKind) -> Option<Self> {
+        match kind {
+            TokenKind::PlusAssign => Some(Self::Add),
+            TokenKind::MinusAssign => Some(Self::Sub),
+            TokenKind::StarAssign => Some(Self::Mul),
+            TokenKind::SlashAssign => Some(Self::Div),
+            TokenKind::PercentAssign => Some(Self::Rem),
+            _ => None
+        }
+    }
+}
+impl UnaryOp {
+    #[must_use] pub const fn from_tokenkind(kind: TokenKind) -> Option<Self> {
+        match kind {
+            TokenKind::Exclamation => Some(Self::Not),
+            TokenKind::Minus => Some(Self::Negative),
+            _ => None
+        }
+    }
+}
 
 
 

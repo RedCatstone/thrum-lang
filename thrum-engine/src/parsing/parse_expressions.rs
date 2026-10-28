@@ -1,6 +1,7 @@
 use crate::{
-    ErrType, WarnType, lexing::{self, tokens::{AssignOp, Span, TokenKind, TokenSpan}},
-    parsing::{Parser, ast::{AstClosure, AstEnumExpression, AstMatchArm, AstTupleElement, AstValue, Expr, ExprId}}
+    ErrType, WarnType,
+    lexing::{self, tokens::{Span, TokenKind, TokenSpan}},
+    parsing::{Parser, ast::{AstClosure, AstEnumExpression, AstMatchArm, AstTupleElement, AstValue, BinOp, Expr, ExprId, UnaryOp}}
 };
 
 
@@ -25,15 +26,16 @@ pub enum Precedence {
 impl Precedence {
     pub const fn get_precedence(token_type: TokenKind) -> Self {
         match token_type {
-            TokenKind::Assign { .. } => Self::Assign,
+            TokenKind::Assign => Self::Assign,
+            _ if BinOp::assign_op_from_tokenkind(token_type).is_some() => Self::Assign,
             TokenKind::DotDot | TokenKind::DotDotEqual => Self::Range,
             TokenKind::Or => Self::Or,
             TokenKind::And => Self::And,
             TokenKind::EqualEqual | TokenKind::NotEqual => Self::Comparison,
             TokenKind::Less | TokenKind::Greater | TokenKind::LessEqual | TokenKind::GreaterEqual => Self::LessGreater,
             TokenKind::Is => Self::Is,
-            TokenKind::Op(AssignOp::Plus | AssignOp::Minus) => Self::Sum,
-            TokenKind::Op(AssignOp::Star | AssignOp::Slash | AssignOp::Percent) => Self::Product,
+            TokenKind::Plus | TokenKind::Minus => Self::Sum,
+            TokenKind::Asterisk | TokenKind::Slash | TokenKind::Percent => Self::Product,
             TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::Dot | TokenKind::ColonColon => Self::CallIndex,
             TokenKind::Caret => Self::Postfix,
             _ => Self::Lowest,
@@ -86,9 +88,9 @@ impl Parser<'_> {
 
             match is_stmt {
                 StmtKind::Stmt | StmtKind::Assign => break, // statements (x = 2, fn ...) can't consume infix operators
-                StmtKind::Let | StmtKind::NestedLet
                 // `let` or `(let a, b)` can ONLY be followed by `=`
-                if peek_op.token != (TokenKind::Assign { extra_op: None }) => break,
+                StmtKind::Let | StmtKind::NestedLet
+                if peek_op.token != TokenKind::Assign => break,
                 _ => {}
             }
 
@@ -119,7 +121,7 @@ impl Parser<'_> {
             }
 
             // special handling for normal Ops: + - * / ...
-            if let TokenKind::Op(_) = peek_op.token {
+            if BinOp::from_tokenkind(peek_op.token).is_some() {
                 // this is an infix operator: `5 \n - 2`
                 // NOT an infix operator:     `5 \n -2`
                 if !self.peek_is_on_same_line() && self.peek_spaces_after() == 0 {
@@ -157,10 +159,9 @@ impl Parser<'_> {
         let start = self.ast.get_expr_span(left_expr);
         let mut is_stmt = StmtKind::Expr;
 
-        if let Precedence::And | Precedence::Or | Precedence::Comparison
-            | Precedence::LessGreater | Precedence::Sum | Precedence::Product = op_precedence {
+        if let Some(bin_op) = BinOp::from_tokenkind(op.token) {
             let right = self.parse_expression(op_precedence, ctx);
-            let expr = self.add_expr(start, Expr::Infix { op: op.token, op_span: op.span, left: left_expr, right });
+            let expr = self.add_expr(start, Expr::Infix { op: bin_op, op_span: op.span, left: left_expr, right });
             return (expr, is_stmt)
         }
 
@@ -177,7 +178,10 @@ impl Parser<'_> {
                 self.add_expr(start, Expr::TypeMemberAccess { left: left_expr, member })
             }
 
-            TokenKind::Assign { extra_op } => {
+            // least annoying rust limitation:
+            kind if kind == TokenKind::Assign || BinOp::assign_op_from_tokenkind(kind).is_some() => {
+                let extra_op = BinOp::assign_op_from_tokenkind(kind);
+
                 is_stmt = if let StmtKind::Let | StmtKind::NestedLet = is_stmt { StmtKind::Stmt } else { StmtKind::Assign };
                 let pattern = self.convert_expr_into_assign_pattern(left_expr);
                 let value = self.parse_expression_default(ctx);
@@ -246,16 +250,16 @@ impl Parser<'_> {
         let mut is_stmt = StmtKind::Expr;
 
         let expr = match op.token {
-            TokenKind::Exclamation | TokenKind::Op(AssignOp::Minus) => {
+            _ if let Some(unary_op) = UnaryOp::from_tokenkind(op.token) => {
                 if self.peek_spaces_before() > 0 {
                     self.error_data.warn(WarnType::ParserUnnecessarySpacingAfterPrefixOp { op: op.token }, op.span);
                 }
 
                 let right = self.parse_expression(Precedence::Prefix, ctx);
-                self.add_expr(start, Expr::Prefix { op: op.token, right })
+                self.add_expr(start, Expr::Prefix { op: unary_op, right })
             }
 
-            TokenKind::Op(AssignOp::Star) => {
+            TokenKind::Asterisk => {
                 let expr = self.parse_expression(Precedence::Prefix, ctx);
                 self.add_expr(start, Expr::Move { expr })
             }
@@ -329,7 +333,7 @@ impl Parser<'_> {
             TokenKind::Const => {
                 is_stmt = StmtKind::Stmt;
                 let pattern = self.parse_pattern(true, ctx);
-                self.expect_token(TokenKind::Assign { extra_op: None }, "to assign a value to the const.");
+                self.expect_token(TokenKind::Assign, "to assign a value to the const.");
                 let value = self.parse_expression_default(ctx);
 
                 self.add_expr(start, Expr::Const { pattern, value })
@@ -337,7 +341,7 @@ impl Parser<'_> {
             TokenKind::Type => {
                 is_stmt = StmtKind::Stmt;
                 let name = self.expect_identifier("to name the type").into_boxed_str();
-                self.expect_token(TokenKind::Assign { extra_op: None }, "to assign a value to the type.");
+                self.expect_token(TokenKind::Assign, "to assign a value to the type.");
                 let value = self.parse_expression_default(ctx);
 
                 self.add_expr(start, Expr::CustomType { name, value })

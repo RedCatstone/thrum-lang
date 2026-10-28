@@ -29,8 +29,12 @@ pub enum TokenKind {
     Colon, ColonColon,
 
     // Operators
-    Assign { extra_op: Option<AssignOp> },
-    Op(AssignOp),
+    Plus, PlusAssign,
+    Minus, MinusAssign,
+    Asterisk, StarAssign,
+    Slash, SlashAssign,
+    Percent, PercentAssign,
+    Assign,
 
     // Bitwise
     // BitNot,
@@ -87,15 +91,6 @@ pub enum TokenKind {
     Mut, Ref, Own,
     Enum, Impl,
 }
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum AssignOp {
-    Plus,
-    Minus,
-    Star,
-    Slash,
-    Percent,
-    QuestQuest,
-}
 
 impl TokenKind {
     pub const PUNCTUATION: &[(&str, Self)] = &[
@@ -119,16 +114,15 @@ impl TokenKind {
         ("&", Self::Ampersand),
 
         // Operators
-        ("+=", Self::Assign { extra_op: Some(AssignOp::Plus) }), ("+", Self::Op(AssignOp::Plus)),
-        ("-=", Self::Assign { extra_op: Some(AssignOp::Minus) }), ("-", Self::Op(AssignOp::Minus)),
-        ("*=", Self::Assign { extra_op: Some(AssignOp::Star) }), ("*", Self::Op(AssignOp::Star)),
-        ("/=", Self::Assign { extra_op: Some(AssignOp::Slash) }), ("/", Self::Op(AssignOp::Slash)),
-        ("%=", Self::Assign { extra_op: Some(AssignOp::Percent) }), ("%", Self::Op(AssignOp::Percent)),
-        ("??=", Self::Assign { extra_op: Some(AssignOp::QuestQuest) }), ("??", Self::Op(AssignOp::QuestQuest)),
+        ("+=", Self::PlusAssign), ("+", Self::Plus),
+        ("-=", Self::MinusAssign), ("-", Self::Minus),
+        ("*=", Self::StarAssign), ("*", Self::Asterisk),
+        ("/=", Self::SlashAssign), ("/", Self::Slash),
+        ("%=", Self::PercentAssign), ("%", Self::Percent),
         ("?", Self::Quest),
 
         // Logical
-        ("==", Self::EqualEqual), ("=", Self::Assign { extra_op: None }),
+        ("==", Self::EqualEqual), ("=", Self::Assign),
         ("!=", Self::NotEqual), ("!", Self::Exclamation),
         ("<=", Self::LessEqual), ("<", Self::Less),
         (">=", Self::GreaterEqual), (">", Self::Greater),

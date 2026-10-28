@@ -1,10 +1,7 @@
 use crate::{
-    lexing::tokens::{AssignOp, TokenKind},
-    parsing::ast::{AstArena, Expr, ExprId},
-    typing::TypedAst,
-    uir::ir::{
-        BinOp, BlockId, Constant, FunctionId, LocalId, Operand, Place, RValue, Statement,
-        Terminator, UirFunction, UnaryOp,
+    parsing::ast::{AstArena, Expr, ExprId}, typing::TypedAst, uir::ir::{
+        BlockId, Constant, FunctionId, LocalId, Operand, Place, RValue, Statement,
+        Terminator, UirFunction,
     },
 };
 
@@ -51,32 +48,18 @@ impl<'a> FnLowerer<'a> {
                 let left_op = self.lower_expr_to_operand(*left);
                 let right_op = self.lower_expr_to_operand(*right);
 
-                let bin_op = match op {
-                    TokenKind::Op(AssignOp::Plus) => BinOp::Add,
-                    TokenKind::Op(AssignOp::Minus) => BinOp::Sub,
-                    TokenKind::Op(AssignOp::Star) => BinOp::Mul,
-                    TokenKind::Op(AssignOp::Slash) => BinOp::Div,
-                    TokenKind::Op(AssignOp::Percent) => BinOp::Rem,
-                    _ => todo!("other operators not supported yet"),
-                };
-
                 self.function.add_statement(
                     self.current_block,
-                    Statement::Assign(dest, RValue::BinaryOp(bin_op, left_op, right_op)),
+                    Statement::Assign(dest, RValue::BinaryOp(*op, left_op, right_op)),
                 );
             }
 
             Expr::Prefix { op, right } => {
                 let right_op = self.lower_expr_to_operand(*right);
 
-                let unary_op = match op {
-                    TokenKind::Op(AssignOp::Minus) => UnaryOp::Neg,
-                    _ => todo!("other prefix operators not supported yet"),
-                };
-
                 self.function.add_statement(
                     self.current_block,
-                    Statement::Assign(dest, RValue::UnaryOp(unary_op, right_op)),
+                    Statement::Assign(dest, RValue::UnaryOp(*op, right_op)),
                 );
             }
 
