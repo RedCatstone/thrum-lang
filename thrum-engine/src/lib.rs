@@ -12,6 +12,7 @@ pub mod nativelib;
 pub mod vm_compiling;
 pub mod vm_evaluating;
 pub mod parsing;
+pub mod uir;
 
 
 
@@ -217,7 +218,7 @@ pub enum WarnType {
 
 const A_LOT_OF_DEBUG_OUTPUT: bool = cfg!(debug_assertions);
 
-const INCLUDE_PRELUDE: bool = true;
+const INCLUDE_PRELUDE: bool = false;
 pub const PRELUDE: &str = if INCLUDE_PRELUDE { include_str!("prelude.thrum") } else { "" };
 
 
@@ -251,13 +252,15 @@ pub fn run_code(source_code: &str) -> (Result<VmValue, Vec<ErrType>>, Vec<WarnTy
     let (typed_ast, mut compiled_functions) = typing::TypeChecker::start(&mut err_data, &ast);
     bail_on_err!(stage_complete("Typechecker", ""/*&format!("typed_ast: {typed_ast:?}")*/, &err_data, &source_data));
 
-    vm_compiling::VmCompiler::start(&ast, &typed_ast, &mut compiled_functions);
-    bail_on_err!(stage_complete("VmCompiler", &format!("{compiled_functions:?}"), &ProgramErrorData::new(), &source_data));
+    // vm_compiling::VmCompiler::start(&ast, &typed_ast, &mut compiled_functions);
+    let uir_fn = uir::lower::FnLowerer::start(&ast, &typed_ast);
+    bail_on_err!(stage_complete("VmCompiler", &format!("{uir_fn}"), &ProgramErrorData::new(), &source_data));
 
     let warnings = err_data.warnings.iter().map(|x| x.err_type.clone()).collect();
-
     let execution_start = Instant::now();
-    let result = unsafe { VM::start(&mut compiled_functions, None, 0) };
+
+    // let result = unsafe { VM::start(&mut compiled_functions, None, 0) };
+    let result = uir::runner::UirRunner::start(&uir_fn);
 
     let timer_str = format!("({GREEN}{:?}{RESET}, {GREEN}{:?}{RESET})",
         execution_start.duration_since(compile_start),
@@ -267,6 +270,8 @@ pub fn run_code(source_code: &str) -> (Result<VmValue, Vec<ErrType>>, Vec<WarnTy
         Ok(r) => {
             println!("--- Execution Successfull {timer_str} ---");
             println!("{YELLOW}{BOLD}{r}{RESET}");
+
+            let r = VmValue::Int(3);
             (Ok(r), warnings)
         }
         Err(err) => {

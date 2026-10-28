@@ -1,6 +1,4 @@
 // run me by doing `cargo run Code.thrum`
 
 
-let mut x = 5
-x *= x
-x
+5 - 3
