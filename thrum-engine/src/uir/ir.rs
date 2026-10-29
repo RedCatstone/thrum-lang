@@ -39,7 +39,7 @@ impl UirFunction {
     }
 
     pub fn new_temp(&mut self, type_id: TypeId) -> LocalId {
-        self.new_local(type_id, None, true)
+        self.new_local(type_id, None, false)
     }
 
     pub fn new_block(&mut self) -> BlockId {

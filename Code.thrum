@@ -1,4 +1,4 @@
 // run me by doing `cargo run Code.thrum`
 
 
-3.2
+1.0 + 2.0 * 3.5 - 4.0

@@ -297,7 +297,7 @@ pub enum UnifyMode {
 }
 
 impl TypeChecker<'_> {
-    pub fn start(error_data: &mut ProgramErrorData, ast: &AstArena) -> (TypedAst, FunctionRegistry) {
+    pub fn start(error_data: &mut ProgramErrorData, ast: &AstArena) -> (TypedAst, FunctionRegistry, TypeArena) {
         let mut tc = TypeChecker {
             error_data, ast,
             typed_ast: TypedAst::new(ast.exprs.len()),
@@ -320,7 +320,7 @@ impl TypeChecker<'_> {
 
         tc.finalize_types_and_vars();
 
-        (tc.typed_ast, tc.compiled_functions)
+        (tc.typed_ast, tc.compiled_functions, tc.type_arena)
     }
 
     #[track_caller]

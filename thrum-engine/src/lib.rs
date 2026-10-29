@@ -249,7 +249,7 @@ pub fn run_code(source_code: &str) -> (Result<VmValue, Vec<ErrType>>, Vec<WarnTy
     parsing::desugar::desugar_after_parsing(&mut ast);
     bail_on_err!(stage_complete("Desugar", &ast.display_expr(ExprId(0)), &ProgramErrorData::new(), &source_data));
 
-    let (typed_ast, mut compiled_functions) = typing::TypeChecker::start(&mut err_data, &ast);
+    let (typed_ast, mut compiled_functions, type_arena) = typing::TypeChecker::start(&mut err_data, &ast);
     bail_on_err!(stage_complete("Typechecker", ""/*&format!("typed_ast: {typed_ast:?}")*/, &err_data, &source_data));
 
     // vm_compiling::VmCompiler::start(&ast, &typed_ast, &mut compiled_functions);
@@ -260,7 +260,7 @@ pub fn run_code(source_code: &str) -> (Result<VmValue, Vec<ErrType>>, Vec<WarnTy
     let execution_start = Instant::now();
 
     // let result = unsafe { VM::start(&mut compiled_functions, None, 0) };
-    let result = uir::runner::UirRunner::start(&uir_fn);
+    let result = uir::runner::UirRunner::start(&uir_fn, &type_arena);
 
     let timer_str = format!("({GREEN}{:?}{RESET}, {GREEN}{:?}{RESET})",
         execution_start.duration_since(compile_start),
@@ -271,7 +271,7 @@ pub fn run_code(source_code: &str) -> (Result<VmValue, Vec<ErrType>>, Vec<WarnTy
             println!("--- Execution Successfull {timer_str} ---");
             println!("{YELLOW}{BOLD}{r}{RESET}");
 
-            let r = VmValue::Int(3);
+            // let r = VmValue::Int(3);
             (Ok(r), warnings)
         }
         Err(err) => {

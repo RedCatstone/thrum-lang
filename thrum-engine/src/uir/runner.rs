@@ -1,13 +1,13 @@
 use crate::{
-    ErrType, parsing::ast::{BinOp, UnaryOp}, uir::ir::{
+    ErrType, parsing::ast::{BinOp, UnaryOp}, typing::{Type, TypeArena}, uir::ir::{
         BlockId, Constant, FunctionId, Operand, Place, Projection, RValue,
         Statement, Terminator, UirFunction,
-    }, vm_compiling::NumMode,
+    }, vm_compiling::{NumMode, VmValue},
 };
 
 pub struct UirRunner<'a> {
     function: &'a UirFunction,
-    pub memory: Vec<u8>,
+    memory: Vec<u8>,
     frames: Vec<Frame>,
 }
 
@@ -19,12 +19,16 @@ struct Frame {
 }
 
 impl<'a> UirRunner<'a> {
-    pub fn start(function: &'a UirFunction) -> Result<i64, ErrType> {
+    pub fn start(function: &'a UirFunction, type_arena: &TypeArena) -> Result<VmValue, ErrType> {
         let mut runner = Self::new(function);
         runner.run()?;
 
         // Return value is stored in `_0` (first 8 bytes of the root frame)
-        Ok(runner.read_int(0))
+        let return_bytes = runner.memory[0..8].try_into().unwrap();
+        let return_type = type_arena.get_type(function.return_type);
+        let vm_val = VmValue::from_bytes(return_bytes, return_type);
+
+        Ok(vm_val)
     }
 
     fn new(function: &'a UirFunction) -> Self {
@@ -53,6 +57,7 @@ impl<'a> UirRunner<'a> {
 
     fn run(&mut self) -> Result<(), ErrType> {
         while let Some(frame) = self.frames.last_mut() {
+            println!("memory: {:?}", self.memory);
             let block = &self.function.blocks[frame.current_block.0 as usize];
 
             if let Some(stmt) = block.statements.get(frame.statement_idx) {
@@ -248,5 +253,18 @@ impl<'a> UirRunner<'a> {
         let mut bytes = [0; 8];
         bytes.copy_from_slice(&self.memory[offset..offset + 8]);
         f64::from_ne_bytes(bytes)
+    }
+}
+
+
+
+impl VmValue {
+    pub fn from_bytes(bytes: [u8; 8], typ: Type) -> VmValue {
+        match typ {
+            Type::Bool => VmValue::Bool(i64::from_ne_bytes(bytes).try_into().unwrap()),
+            Type::NumInt => VmValue::Int(i64::from_ne_bytes(bytes)),
+            Type::NumFloat => VmValue::Float(f64::from_ne_bytes(bytes)),
+            _ => todo!("{typ:?} not yet handled")
+        }
     }
 }
