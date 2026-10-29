@@ -2,7 +2,7 @@ use crate::{
     ErrType, parsing::ast::{BinOp, UnaryOp}, uir::ir::{
         BlockId, Constant, FunctionId, Operand, Place, Projection, RValue,
         Statement, Terminator, UirFunction,
-    },
+    }, vm_compiling::NumMode,
 };
 
 pub struct UirRunner<'a> {
@@ -24,7 +24,7 @@ impl<'a> UirRunner<'a> {
         runner.run()?;
 
         // Return value is stored in `_0` (first 8 bytes of the root frame)
-        Ok(runner.read_int_at(0))
+        Ok(runner.read_int(0))
     }
 
     fn new(function: &'a UirFunction) -> Self {
@@ -74,49 +74,74 @@ impl<'a> UirRunner<'a> {
             Statement::Assign(dest_place, rvalue) => {
                 let dest_offset = self.resolve_place(dest_place);
 
-                match rvalue {
-                    RValue::Use(op) => {
-                        let val = self.eval_operand_int(op);
-                        self.write_int(dest_offset, val);
-                    }
-                    RValue::BinaryOp(op, left, right) => {
-                        let a = self.eval_operand_int(left);
-                        let b = self.eval_operand_int(right);
-                        let res = match op {
-                            BinOp::Add => a + b,
-                            BinOp::Sub => a - b,
-                            BinOp::Mul => a * b,
-                            BinOp::Div => {
-                                match a.checked_div(b) {
-                                    Some(res) => res,
-                                    None => return Err(ErrType::RuntimeError { msg: "division by zero".into() })
-                                }
-                            }
-                            BinOp::Rem => {
-                                match a.checked_rem(b) {
-                                    Some(res) => res,
-                                    None => return Err(ErrType::RuntimeError { msg: "division by zero".into() })
-                                }
-                            }
-                            BinOp::Equal => i64::from(a == b),
-                            BinOp::NotEqual => i64::from(a != b),
-                            BinOp::Less => i64::from(a < b),
-                            BinOp::LessEqual => i64::from(a <= b),
-                            BinOp::Greater => i64::from(a > b),
-                            BinOp::GreaterEqual => i64::from(a >= b),
-                            _ => todo!("BinOp {op:?} not implemented yet"),
-                        };
-                        self.write_int(dest_offset, res);
-                    }
-                    RValue::UnaryOp(UnaryOp::Negative, op) => {
-                        let a = self.eval_operand_int(op);
-                        self.write_int(dest_offset, -a);
-                    }
-                    _ => todo!("Rvalue {rvalue:?} not implemented yet"),
-                }
+                self.evaluate_rvalue(rvalue, dest_offset)?;
             }
             Statement::Nop => {}
             _ => todo!("Statement {stmt:?} not implemented yet"),
+        }
+        Ok(())
+    }
+
+    fn evaluate_rvalue(&mut self, rvalue: &RValue, dest: usize) -> Result<(), ErrType> {
+        match rvalue {
+            RValue::Use(op) => {
+                self.write_bytes(dest, &self.eval_operand_bytes(op));
+            }
+            RValue::BinaryOp(op, num_mode, left, right) => {
+                match num_mode {
+                    NumMode::Int => {
+                        let a = self.eval_operand_int(left);
+                        let b = self.eval_operand_int(right);
+                        match op {
+                            BinOp::Add => self.write_int(dest, a + b),
+                            BinOp::Sub => self.write_int(dest, a - b),
+                            BinOp::Mul => self.write_int(dest, a * b),
+                            BinOp::Div => self.write_int(dest, match a.checked_div(b) {
+                                Some(res) => res,
+                                None => return Err(ErrType::RuntimeError { msg: "division by zero".into() })
+                            }),
+                            BinOp::Rem => self.write_int(dest, match a.checked_rem(b) {
+                                Some(res) => res,
+                                None => return Err(ErrType::RuntimeError { msg: "division by zero".into() })
+                            }),
+                            BinOp::Equal => self.write_int(dest, i64::from(a == b)),
+                            BinOp::NotEqual => self.write_int(dest, i64::from(a != b)),
+                            BinOp::Less => self.write_int(dest, i64::from(a < b)),
+                            BinOp::LessEqual => self.write_int(dest, i64::from(a <= b)),
+                            BinOp::Greater => self.write_int(dest, i64::from(a > b)),
+                            BinOp::GreaterEqual => self.write_int(dest, i64::from(a >= b)),
+                            _ => todo!("BinOp {op:?} not implemented yet"),
+                        }
+                    }
+                    NumMode::Float => {
+                        let a = self.eval_operand_float(left);
+                        let b = self.eval_operand_float(right);
+
+                        #[expect(clippy::float_cmp)]
+                        match op {
+                            BinOp::Add => self.write_float(dest, a + b),
+                            BinOp::Sub => self.write_float(dest, a - b),
+                            BinOp::Mul => self.write_float(dest, a * b),
+                            BinOp::Div => self.write_float(dest, a / b),
+                            BinOp::Rem => self.write_float(dest, a % b),
+                            BinOp::Equal => self.write_int(dest, i64::from(a == b)),
+                            BinOp::NotEqual => self.write_int(dest, i64::from(a != b)),
+                            BinOp::Less => self.write_int(dest, i64::from(a < b)),
+                            BinOp::LessEqual => self.write_int(dest, i64::from(a <= b)),
+                            BinOp::Greater => self.write_int(dest, i64::from(a > b)),
+                            BinOp::GreaterEqual => self.write_int(dest, i64::from(a >= b)),
+                            _ => todo!("BinOp {op:?} not implemented yet"),
+                        }
+                    }
+                }
+            }
+            RValue::UnaryOp(UnaryOp::Negative, num_mode, op) => {
+                match num_mode {
+                    NumMode::Int => self.write_int(dest, -self.eval_operand_int(op)),
+                    NumMode::Float => self.write_float(dest, -self.eval_operand_float(op))
+                }
+            }
+            _ => todo!("Rvalue {rvalue:?} not implemented yet"),
         }
         Ok(())
     }
@@ -152,7 +177,7 @@ impl<'a> UirRunner<'a> {
             Terminator::Unreachable => Err(ErrType::RuntimeError {
                 msg: "entered unreachable code...".into(),
             }),
-            _ => todo!("Terminator {term:?} not implemented yet"),
+            Terminator::Call { .. } => todo!("Terminator {term:?} not implemented yet"),
         }
     }
 
@@ -164,7 +189,7 @@ impl<'a> UirRunner<'a> {
             match proj {
                 // read pointer value (which is a byte offset into self.memory)
                 Projection::Deref => {
-                    let ptr_bytes = self.read_int_at(offset);
+                    let ptr_bytes = self.read_int(offset);
                     offset = usize::try_from(ptr_bytes).unwrap();
                 }
                 // field index: +8 bytes per field
@@ -173,7 +198,7 @@ impl<'a> UirRunner<'a> {
                 }
                 // dynamic array index
                 Projection::Index(idx_local) => {
-                    let idx = self.read_int_at(frame.base_offset + (idx_local.0 as usize) * 8);
+                    let idx = self.read_int(frame.base_offset + (idx_local.0 as usize) * 8);
                     offset += (usize::try_from(idx).unwrap()) * 8;
                 }
                 _ => todo!("Projection {proj:?} not supported yet"),
@@ -182,26 +207,46 @@ impl<'a> UirRunner<'a> {
         offset
     }
 
-    fn eval_operand_int(&self, op: &Operand) -> i64 {
+
+    fn eval_operand_bytes(&self, op: &Operand) -> [u8; 8] {
         match op {
-            Operand::Constant(Constant::Int(i)) => *i,
-            Operand::Constant(Constant::Bool(b)) => i64::from(*b),
+            Operand::Constant(Constant::Int(i)) => i.to_ne_bytes(),
+            Operand::Constant(Constant::Float(f)) => f.to_ne_bytes(),
+            Operand::Constant(Constant::Bool(b)) => i64::from(*b).to_ne_bytes(),
             Operand::Copy(place) | Operand::Move(place) => {
                 let offset = self.resolve_place(place);
-                self.read_int_at(offset)
+                let mut bytes = [0; 8];
+                bytes.copy_from_slice(&self.memory[offset..offset + 8]);
+                bytes
             }
-            _ => todo!("Operand {op:?} not supported yet"),
+            Operand::Constant(_) => todo!("Operand {op:?} not supported yet"),
         }
     }
-
-    fn write_int(&mut self, offset: usize, val: i64) {
-        let bytes = val.to_ne_bytes();
-        self.memory[offset..offset + 8].copy_from_slice(&bytes);
+    fn eval_operand_int(&self, op: &Operand) -> i64 {
+        i64::from_ne_bytes(self.eval_operand_bytes(op))
+    }
+    fn eval_operand_float(&self, op: &Operand) -> f64 {
+        f64::from_ne_bytes(self.eval_operand_bytes(op))
     }
 
-    fn read_int_at(&self, offset: usize) -> i64 {
+    fn write_bytes(&mut self, offset: usize, bytes: &[u8]) {
+        self.memory[offset..offset + bytes.len()].copy_from_slice(bytes);
+    }
+    fn write_int(&mut self, offset: usize, val: i64) {
+        self.write_bytes(offset, &val.to_ne_bytes());
+    }
+    fn write_float(&mut self, offset: usize, val: f64) {
+        self.write_bytes(offset, &val.to_ne_bytes());
+    }
+
+    fn read_int(&self, offset: usize) -> i64 {
         let mut bytes = [0; 8];
         bytes.copy_from_slice(&self.memory[offset..offset + 8]);
         i64::from_ne_bytes(bytes)
+    }
+    fn read_float(&self, offset: usize) -> f64 {
+        let mut bytes = [0; 8];
+        bytes.copy_from_slice(&self.memory[offset..offset + 8]);
+        f64::from_ne_bytes(bytes)
     }
 }

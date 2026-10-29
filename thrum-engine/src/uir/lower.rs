@@ -47,19 +47,21 @@ impl<'a> FnLowerer<'a> {
             Expr::Infix { op, left, right, op_span: _ } => {
                 let left_op = self.lower_expr_to_operand(*left);
                 let right_op = self.lower_expr_to_operand(*right);
+                let num_mode = self.typed_ast.resolved_num_mode[&expr_id];
 
                 self.function.add_statement(
                     self.current_block,
-                    Statement::Assign(dest, RValue::BinaryOp(*op, left_op, right_op)),
+                    Statement::Assign(dest, RValue::BinaryOp(*op, num_mode, left_op, right_op)),
                 );
             }
 
             Expr::Prefix { op, right } => {
                 let right_op = self.lower_expr_to_operand(*right);
+                let num_mode = self.typed_ast.resolved_num_mode[&expr_id];
 
                 self.function.add_statement(
                     self.current_block,
-                    Statement::Assign(dest, RValue::UnaryOp(*op, right_op)),
+                    Statement::Assign(dest, RValue::UnaryOp(*op, num_mode, right_op)),
                 );
             }
 

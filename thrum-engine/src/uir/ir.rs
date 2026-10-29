@@ -1,5 +1,5 @@
 use crate::{
-    parsing::ast::{AstIds, AstValue, BinOp, UnaryOp}, typing::{EnumId, TypeId}, vm_compiling::VmFormatArgDisplayFn,
+    parsing::ast::{AstIds, AstValue, BinOp, UnaryOp}, typing::{EnumId, TypeId}, vm_compiling::{NumMode, VmFormatArgDisplayFn},
 };
 
 
@@ -214,8 +214,8 @@ pub enum Statement {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RValue {
     Use(Operand),
-    UnaryOp(UnaryOp, Operand),
-    BinaryOp(BinOp, Operand, Operand),
+    UnaryOp(UnaryOp, NumMode, Operand),
+    BinaryOp(BinOp, NumMode, Operand, Operand),
     MakeRef { mutable: bool, place: Place },
     UseDiscriminant(Place),
     MakeAggregate(AggregateKind, Vec<Operand>),

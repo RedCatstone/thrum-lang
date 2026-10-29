@@ -132,8 +132,8 @@ impl Display for RValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Use(op) => write!(f, "{op}"),
-            Self::UnaryOp(op, operand) => write!(f, "{op:?}({operand})"),
-            Self::BinaryOp(op, left, right) => write!(f, "{op:?}({left}, {right})"),
+            Self::UnaryOp(op, num_mode, operand) => write!(f, "{op:?}{num_mode:?}({operand})"),
+            Self::BinaryOp(op, num_mode, left, right) => write!(f, "{op:?}{num_mode:?}({left}, {right})"),
             Self::MakeRef { mutable, place } => {
                 write!(f, "&{}{place}", if *mutable { "mut " } else { "" })
             }
