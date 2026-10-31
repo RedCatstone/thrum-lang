@@ -1,4 +1,5 @@
 // run me by doing `cargo run Code.thrum`
 
+let x = 15
 
-1.0 + 2.0 * 3.5 - 4.0
+x^

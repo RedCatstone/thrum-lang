@@ -23,7 +23,7 @@ impl UirFunction {
                 LocalDecl {
                     id: LocalId::RETURN_PLACE,
                     type_id: return_type,
-                    debug_name: Some("_0".to_string()),
+                    debug_name: Some("_0".into()),
                     is_mut: true,
                 }
             ],
@@ -32,7 +32,7 @@ impl UirFunction {
         }
     }
 
-    pub fn new_local(&mut self, type_id: TypeId, debug_name: Option<String>, is_mut: bool) -> LocalId {
+    pub fn new_local(&mut self, type_id: TypeId, debug_name: Option<Box<str>>, is_mut: bool) -> LocalId {
         let id = LocalId(self.locals.len().try_into().unwrap());
         self.locals.push(LocalDecl { id, type_id, debug_name, is_mut });
         id
@@ -74,54 +74,8 @@ impl LocalId {
 pub struct LocalDecl {
     pub id: LocalId,
     pub type_id: TypeId,
-    pub debug_name: Option<String>,
+    pub debug_name: Option<Box<str>>,
     pub is_mut: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Place {
-    pub local: LocalId,
-    pub projections: Vec<Projection>,
-}
-
-impl Place {
-    #[must_use] pub const fn from_local(local: LocalId) -> Self {
-        Self { local, projections: Vec::new() }
-    }
-
-    #[must_use] pub fn field(mut self, index: usize) -> Self {
-        self.projections.push(Projection::Field(index));
-        self
-    }
-
-    #[must_use] pub fn deref(mut self) -> Self {
-        self.projections.push(Projection::Deref);
-        self
-    }
-
-    #[must_use] pub fn index(mut self, local: LocalId) -> Self {
-        self.projections.push(Projection::Index(local));
-        self
-    }
-
-    #[must_use] pub fn downcast(mut self, variant: usize) -> Self {
-        self.projections.push(Projection::Downcast(variant));
-        self
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Projection {
-    /// `*p`
-    Deref,
-    /// `val.0` or `val.field`
-    Field(usize),
-    /// `slice[index_local]`
-    Index(LocalId),
-    /// `arr[const_index]`
-    ConstantIndex(usize),
-    /// Enum variant payload access
-    Downcast(usize),
 }
 
 
@@ -149,39 +103,9 @@ impl Constant {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operand {
-    Copy(Place),
-    Move(Place),
+    Copy(LocalId),
+    Move(LocalId),
     Constant(Constant),
-}
-
-impl Operand {
-    #[must_use] pub const fn copy(local: LocalId) -> Self {
-        Self::Copy(Place::from_local(local))
-    }
-
-    #[must_use] pub const fn copy_place(place: Place) -> Self {
-        Self::Copy(place)
-    }
-
-    #[must_use] pub const fn move_place(place: Place) -> Self {
-        Self::Move(place)
-    }
-
-    #[must_use] pub const fn const_int(val: i64) -> Self {
-        Self::Constant(Constant::Int(val))
-    }
-
-    #[must_use] pub const fn const_float(val: f64) -> Self {
-        Self::Constant(Constant::Float(val))
-    }
-
-    #[must_use] pub const fn const_bool(val: bool) -> Self {
-        Self::Constant(Constant::Bool(val))
-    }
-
-    #[must_use] pub const fn const_void() -> Self {
-        Self::Constant(Constant::Void)
-    }
 }
 
 
@@ -201,9 +125,9 @@ impl BasicBlock {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
-    Assign(Place, RValue),
+    Assign(LocalId, RValue),
     SetDiscriminant {
-        place: Place,
+        local: LocalId,
         variant_index: usize,
     },
     StorageLive(LocalId),
@@ -216,11 +140,12 @@ pub enum RValue {
     Use(Operand),
     UnaryOp(UnaryOp, NumMode, Operand),
     BinaryOp(BinOp, NumMode, Operand, Operand),
-    MakeRef { mutable: bool, place: Place },
-    UseDiscriminant(Place),
+    MakeRef { mutable: bool, local: LocalId },
+    Deref(LocalId),
+    UseDiscriminant(LocalId),
     MakeAggregate(AggregateKind, Vec<Operand>),
     MakeSlice { ptr: Operand, len: Operand },
-    GetLen(Place),
+    GetLen(LocalId),
     Cast { operand: Operand, target_type: TypeId },
 }
 
@@ -250,7 +175,7 @@ pub enum Terminator {
     Call {
         func: Operand,
         args: Vec<Operand>,
-        destination: Place,
+        destination: LocalId,
         target: Option<BlockId>,
     },
     /// returns value in `LocalId::RETURN_PLACE`

@@ -1,8 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 
 use crate::uir::ir::{
-    AggregateKind, Constant, Operand, Place, Projection, RValue, Statement,
-    Terminator, UirFunction,
+    AggregateKind, Constant, LocalId, Operand, RValue, Statement, Terminator, UirFunction,
 };
 
 impl Display for UirFunction {
@@ -50,9 +49,9 @@ impl UirFunction {
 impl Display for Statement {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Assign(place, rvalue) => write!(f, "{place} = {rvalue};"),
-            Self::SetDiscriminant { place, variant_index } => {
-                write!(f, "discriminant({place}) = {variant_index};")
+            Self::Assign(local, rvalue) => write!(f, "{local} = {rvalue};"),
+            Self::SetDiscriminant { local, variant_index } => {
+                write!(f, "discriminant({local}) = {variant_index};")
             }
             Self::StorageLive(local) => write!(f, "StorageLive(_{});", local.0),
             Self::StorageDead(local) => write!(f, "StorageDead(_{});", local.0),
@@ -87,19 +86,9 @@ impl Display for Terminator {
     }
 }
 
-impl Display for Place {
+impl Display for LocalId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let mut s = format!("_{}", self.local.0);
-        for proj in &self.projections {
-            s = match proj {
-                Projection::Deref => format!("(*{s})"),
-                Projection::Field(idx) => format!("{s}.{idx}"),
-                Projection::Index(idx) => format!("{s}[_{}]", idx.0),
-                Projection::ConstantIndex(idx) => format!("{s}[{idx}]"),
-                Projection::Downcast(idx) => format!("({s} as variant#{idx})"),
-            }
-        }
-        write!(f, "{s}")
+        write!(f, "_{}", self.0)
     }
 }
 
@@ -134,9 +123,10 @@ impl Display for RValue {
             Self::Use(op) => write!(f, "{op}"),
             Self::UnaryOp(op, num_mode, operand) => write!(f, "{op:?}{num_mode:?}({operand})"),
             Self::BinaryOp(op, num_mode, left, right) => write!(f, "{op:?}{num_mode:?}({left}, {right})"),
-            Self::MakeRef { mutable, place } => {
-                write!(f, "&{}{place}", if *mutable { "mut " } else { "" })
+            Self::MakeRef { mutable, local } => {
+                write!(f, "&{}{local}", if *mutable { "mut " } else { "" })
             }
+            Self::Deref(local) => write!(f, "({local})^"),
             Self::UseDiscriminant(place) => write!(f, "discriminant({place})"),
             Self::MakeAggregate(kind, operands) => {
                 let ops: Vec<String> = operands.iter().map(std::string::ToString::to_string).collect();

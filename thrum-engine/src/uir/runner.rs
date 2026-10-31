@@ -1,7 +1,6 @@
 use crate::{
     ErrType, parsing::ast::{BinOp, UnaryOp}, typing::{Type, TypeArena}, uir::ir::{
-        BlockId, Constant, FunctionId, Operand, Place, Projection, RValue,
-        Statement, Terminator, UirFunction,
+        BlockId, Constant, FunctionId, LocalId, Operand, RValue, Statement, Terminator, UirFunction,
     }, vm_compiling::{NumMode, VmValue},
 };
 
@@ -26,7 +25,7 @@ impl<'a> UirRunner<'a> {
         // Return value is stored in `_0` (first 8 bytes of the root frame)
         let return_bytes = runner.memory[0..8].try_into().unwrap();
         let return_type = type_arena.get_type(function.return_type);
-        let vm_val = VmValue::from_bytes(return_bytes, return_type);
+        let vm_val = VmValue::from_bytes(return_bytes, &return_type);
 
         Ok(vm_val)
     }
@@ -57,12 +56,13 @@ impl<'a> UirRunner<'a> {
 
     fn run(&mut self) -> Result<(), ErrType> {
         while let Some(frame) = self.frames.last_mut() {
-            println!("memory: {:?}", self.memory);
             let block = &self.function.blocks[frame.current_block.0 as usize];
 
             if let Some(stmt) = block.statements.get(frame.statement_idx) {
                 frame.statement_idx += 1;
                 self.step_statement(stmt)?;
+
+                println!("{:<30} {:?}", format!("{stmt}"), self.memory);
             }
             else {
                 let finished = self.step_terminator(&block.terminator)?;
@@ -76,8 +76,8 @@ impl<'a> UirRunner<'a> {
 
     fn step_statement(&mut self, stmt: &Statement) -> Result<(), ErrType> {
         match stmt {
-            Statement::Assign(dest_place, rvalue) => {
-                let dest_offset = self.resolve_place(dest_place);
+            Statement::Assign(dest_local, rvalue) => {
+                let dest_offset = self.resolve_local_offset(*dest_local);
 
                 self.evaluate_rvalue(rvalue, dest_offset)?;
             }
@@ -146,6 +146,18 @@ impl<'a> UirRunner<'a> {
                     NumMode::Float => self.write_float(dest, -self.eval_operand_float(op))
                 }
             }
+            RValue::MakeRef { mutable: _, local } => {
+                let offset = self.resolve_local_offset(*local);
+                self.write_pointer(dest, offset);
+            }
+            RValue::Deref(local) => {
+                let pointer_offset = self.read_pointer(self.resolve_local_offset(*local));
+
+                let mut bytes = [0; 8];
+                bytes.copy_from_slice(&self.memory[pointer_offset..pointer_offset + 8]);
+
+                self.write_bytes(dest, &bytes);
+            }
             _ => todo!("Rvalue {rvalue:?} not implemented yet"),
         }
         Ok(())
@@ -186,30 +198,8 @@ impl<'a> UirRunner<'a> {
         }
     }
 
-    fn resolve_place(&self, place: &Place) -> usize {
-        let frame = self.frames.last().unwrap();
-        let mut offset = frame.base_offset + (place.local.0 as usize) * 8;
-
-        for proj in &place.projections {
-            match proj {
-                // read pointer value (which is a byte offset into self.memory)
-                Projection::Deref => {
-                    let ptr_bytes = self.read_int(offset);
-                    offset = usize::try_from(ptr_bytes).unwrap();
-                }
-                // field index: +8 bytes per field
-                Projection::Field(idx) => {
-                    offset += idx * 8;
-                }
-                // dynamic array index
-                Projection::Index(idx_local) => {
-                    let idx = self.read_int(frame.base_offset + (idx_local.0 as usize) * 8);
-                    offset += (usize::try_from(idx).unwrap()) * 8;
-                }
-                _ => todo!("Projection {proj:?} not supported yet"),
-            }
-        }
-        offset
+    fn resolve_local_offset(&self, local: LocalId) -> usize {
+        self.frames.last().unwrap().base_offset + (local.0 as usize) * 8
     }
 
 
@@ -218,8 +208,9 @@ impl<'a> UirRunner<'a> {
             Operand::Constant(Constant::Int(i)) => i.to_ne_bytes(),
             Operand::Constant(Constant::Float(f)) => f.to_ne_bytes(),
             Operand::Constant(Constant::Bool(b)) => i64::from(*b).to_ne_bytes(),
-            Operand::Copy(place) | Operand::Move(place) => {
-                let offset = self.resolve_place(place);
+            Operand::Constant(Constant::Void) => [0; _],
+            Operand::Copy(local) | Operand::Move(local) => {
+                let offset = self.resolve_local_offset(*local);
                 let mut bytes = [0; 8];
                 bytes.copy_from_slice(&self.memory[offset..offset + 8]);
                 bytes
@@ -237,6 +228,9 @@ impl<'a> UirRunner<'a> {
     fn write_bytes(&mut self, offset: usize, bytes: &[u8]) {
         self.memory[offset..offset + bytes.len()].copy_from_slice(bytes);
     }
+    fn write_pointer(&mut self, offset: usize, val: usize) {
+        self.write_bytes(offset, &val.to_ne_bytes());
+    }
     fn write_int(&mut self, offset: usize, val: i64) {
         self.write_bytes(offset, &val.to_ne_bytes());
     }
@@ -244,6 +238,11 @@ impl<'a> UirRunner<'a> {
         self.write_bytes(offset, &val.to_ne_bytes());
     }
 
+    fn read_pointer(&self, offset: usize) -> usize {
+        let mut bytes = [0; 8];
+        bytes.copy_from_slice(&self.memory[offset..offset + 8]);
+        usize::from_ne_bytes(bytes)
+    }
     fn read_int(&self, offset: usize) -> i64 {
         let mut bytes = [0; 8];
         bytes.copy_from_slice(&self.memory[offset..offset + 8]);
@@ -259,11 +258,12 @@ impl<'a> UirRunner<'a> {
 
 
 impl VmValue {
-    pub fn from_bytes(bytes: [u8; 8], typ: Type) -> VmValue {
+    #[must_use] pub fn from_bytes(bytes: [u8; 8], typ: &Type) -> Self {
         match typ {
-            Type::Bool => VmValue::Bool(i64::from_ne_bytes(bytes).try_into().unwrap()),
-            Type::NumInt => VmValue::Int(i64::from_ne_bytes(bytes)),
-            Type::NumFloat => VmValue::Float(f64::from_ne_bytes(bytes)),
+            Type::Bool => Self::Bool(i64::from_ne_bytes(bytes).try_into().unwrap()),
+            Type::NumInt => Self::Int(i64::from_ne_bytes(bytes)),
+            Type::NumFloat => Self::Float(f64::from_ne_bytes(bytes)),
+            Type::Void => Self::Void,
             _ => todo!("{typ:?} not yet handled")
         }
     }
