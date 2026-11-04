@@ -66,7 +66,7 @@ impl Display for Terminator {
         match self {
             Self::Goto(target) => write!(f, "goto -> bb{};", target.0),
             Self::MatchOnInt { discr, targets, otherwise } => {
-                write!(f, "switchInt({discr}) -> [")?;
+                write!(f, "MatchOnInt({discr}) -> [")?;
                 for (val, target) in targets {
                     write!(f, "{val}: bb{}, ", target.0)?;
                 }

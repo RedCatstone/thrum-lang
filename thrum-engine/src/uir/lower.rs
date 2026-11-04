@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    parsing::ast::{AstArena, Expr, ExprId, Pattern, PatternId}, typing::{ResolvedMemberAccess, TupMode, Type, TypeArena, TypeId, TypeVarId, TypedAst}, uir::ir::{
+    parsing::ast::{AstArena, BinOp, Expr, ExprId, Pattern, PatternId}, typing::{ResolvedMemberAccess, TupMode, Type, TypeArena, TypeId, TypeVarId, TypedAst}, uir::ir::{
         BlockId, Constant, FunctionId, LocalId, Operand, RValue, Statement, Terminator, UirFunction,
-    },
+    }, vm_compiling::NumMode,
 };
 
 pub struct FnLowerer<'a> {
@@ -73,7 +73,7 @@ impl<'a> FnLowerer<'a> {
             Expr::Infix { op, left, right, op_span: _ } => {
                 let left_op = self.lower_expr_to_operand(*left);
                 let right_op = self.lower_expr_to_operand(*right);
-                let num_mode = self.typed_ast.resolved_num_mode[&expr_id];
+                let num_mode = self.typed_ast.resolved_num_mode.get(&expr_id).copied().unwrap_or(NumMode::Int);
 
                 self.add_curr_statement(Statement::Assign(dest, RValue::BinaryOp(*op, num_mode, left_op, right_op)));
             }
@@ -132,7 +132,7 @@ impl<'a> FnLowerer<'a> {
                 }
                 else {
                     let val_place = self.new_temp_expr(*value);
-                    self.lower_pattern(*pattern, val_place);
+                    self.lower_pattern(*pattern, val_place, None);
                 }
 
                 self.add_curr_statement(Statement::Assign(
@@ -225,6 +225,58 @@ impl<'a> FnLowerer<'a> {
                 }
             }
 
+
+            // Control Flow
+            Expr::If { condition, then, alt, never_alt: _ } => {
+                let condition_op = self.lower_expr_to_operand(*condition);
+
+                let then_block = self.function.new_block();
+                let alt_block = self.function.new_block();
+                let after_if_block = self.function.new_block();
+
+                self.function.set_terminator(self.current_block, Terminator::MatchOnInt {
+                    discr: condition_op,
+                    targets: vec![(1, then_block)],
+                    otherwise: alt_block
+                });
+
+                self.current_block = then_block;
+                self.lower_expr_to_local(*then, dest);
+                self.function.set_terminator(then_block, Terminator::Goto(after_if_block));
+
+                self.current_block = alt_block;
+                self.lower_expr_to_local(*alt, dest);
+                self.function.set_terminator(alt_block, Terminator::Goto(after_if_block));
+
+                self.current_block = after_if_block;
+            }
+
+            Expr::Match { match_value, arms } => {
+                let value_local = self.new_temp_expr(*match_value);
+                let after_match_block = self.function.new_block();
+
+                let curr_arm = self.function.new_block();
+
+                for (i, arm) in arms.iter().enumerate() {
+                    let arm_body_block = self.function.new_block();
+                    let next_arm_block = self.function.new_block();
+
+                    self.lower_pattern(arm.pattern, value_local, Some((arm_body_block, next_arm_block)));
+
+                    self.current_block = arm_body_block;
+                    self.lower_expr_to_local(arm.body, dest);
+                    self.function.set_terminator(self.current_block, Terminator::Goto(after_match_block));
+
+                    // Advance to test the next arm
+                    self.current_block = next_arm_block;
+
+                    let is_last = i + 1 == arms.len();
+                    if is_last {
+                        self.function.set_terminator(next_arm_block, Terminator::Unreachable);
+                    }
+                }
+            }
+
             other => todo!("support for {other:?} not yet implemented"),
         }
     }
@@ -294,8 +346,17 @@ impl<'a> FnLowerer<'a> {
     }
 
 
+    fn num_mode_for_type(&self, typ: TypeId) -> NumMode {
+        match self.type_arena.get_type(typ) {
+            Type::NumFloat => NumMode::Float,
+            Type::CustomType(_, inner) | Type::Borrow { inner, .. } => self.num_mode_for_type(inner),
+            _ => NumMode::Int,
+        }
+    }
 
-    fn lower_pattern(&mut self, pattern: PatternId, val_local: LocalId) {
+
+
+    fn lower_pattern(&mut self, pattern: PatternId, val_local: LocalId, success_fail_block: Option<(BlockId, BlockId)>) {
         let pointer_count = self.typed_ast.resolved_pattern_derefs.get(&pattern).copied().unwrap_or(0);
         let mut current_val = val_local;
         let mut current_type = self.function.locals[val_local.0 as usize].type_id;
@@ -310,6 +371,13 @@ impl<'a> FnLowerer<'a> {
             current_type = inner;
         }
 
+        let go_success = || if let Some((success_block, _)) = success_fail_block {
+            self.function.set_terminator(self.current_block, Terminator::Goto(success_block));
+        };
+        let go_fail = || if let Some((_, fail_block)) = success_fail_block {
+            self.function.set_terminator(self.current_block, Terminator::Goto(fail_block));
+        };
+
 
         match self.ast.get_pattern(pattern) {
             Pattern::Binding { .. } => {
@@ -317,10 +385,31 @@ impl<'a> FnLowerer<'a> {
                 let local = self.get_or_create_local(var_id);
 
                 self.add_curr_statement(Statement::Assign(local, RValue::Use(Operand::Copy(val_local))));
+                go_success();
             }
 
             Pattern::Wildcard => {
                 // Wildcard go brrrr
+                go_success();
+            }
+
+            Pattern::CompareExpr(expr) => {
+                let expr_op = self.lower_expr_to_operand(*expr);
+                let val_type = self.function.locals[current_val.0 as usize].type_id;
+                let num_mode = self.num_mode_for_type(val_type);
+
+                let cmp_temp = self.new_temp_of_type(TypeId::BOOL);
+                self.add_curr_statement(Statement::Assign(
+                    cmp_temp,
+                    RValue::BinaryOp(BinOp::Equal, num_mode, Operand::Copy(current_val), expr_op),
+                ));
+
+                let (success_block, failure_block) = success_fail_block.unwrap();
+                self.function.set_terminator(self.current_block, Terminator::MatchOnInt {
+                    discr: Operand::Copy(cmp_temp),
+                    targets: vec![(1, success_block)],
+                    otherwise: failure_block,
+                });
             }
 
             Pattern::Tuple(elems) => {

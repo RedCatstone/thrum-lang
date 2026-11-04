@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use simply_colored::{RESET, YELLOW};
 use crate::{
     ErrType, parsing::ast::{BinOp, UnaryOp}, typing::{TupMode, Type, TypeArena, TypeId}, uir::ir::{
         BlockId, Constant, FunctionId, LocalId, Operand, RValue, Statement, Terminator, UirFunction,
@@ -57,15 +57,16 @@ impl<'a> UirRunner<'a> {
                 frame.statement_idx += 1;
                 self.step_statement(stmt)?;
 
-                let mut memory_str = String::new();
+                print!("{:<30} [", format!("{stmt}"));
                 for i in 0..self.memory.len() / 8 {
-                    write!(memory_str, "{}", self.read_int(i * 8)).unwrap();
-                    if i != self.memory.len() / 8 - 1 { write!(memory_str, " ").unwrap() }
+                    print!("{}", self.read_int(i * 8));
+                    if i != self.memory.len() / 8 - 1 { print!(" ") }
                 }
-                println!("{:<30} [{}]", format!("{stmt}"), memory_str);
+                println!("]");
             }
             else {
                 let finished = self.step_terminator(&block.terminator)?;
+                println!("{YELLOW}{:<30}{RESET}", format!("{}", block.terminator));
                 if finished {
                     break
                 }

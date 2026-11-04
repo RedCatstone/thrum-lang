@@ -1,5 +1,7 @@
 // run me by doing `cargo run Code.thrum`
 
-let x = (1, 2, 3)
-
-x.2
+69 + if 1 > 0 {
+    31
+} else {
+    -1
+}
