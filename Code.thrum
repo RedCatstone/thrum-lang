@@ -1,5 +1,5 @@
 // run me by doing `cargo run Code.thrum`
 
-let x = 15
+let x = (1, 2, 3)
 
-x^
+x.2

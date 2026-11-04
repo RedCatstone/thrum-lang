@@ -1,5 +1,6 @@
+use std::fmt::Write;
 use crate::{
-    ErrType, parsing::ast::{BinOp, UnaryOp}, typing::{Type, TypeArena}, uir::ir::{
+    ErrType, parsing::ast::{BinOp, UnaryOp}, typing::{TupMode, Type, TypeArena, TypeId}, uir::ir::{
         BlockId, Constant, FunctionId, LocalId, Operand, RValue, Statement, Terminator, UirFunction,
     }, vm_compiling::{NumMode, VmValue},
 };
@@ -22,12 +23,8 @@ impl<'a> UirRunner<'a> {
         let mut runner = Self::new(function);
         runner.run()?;
 
-        // Return value is stored in `_0` (first 8 bytes of the root frame)
-        let return_bytes = runner.memory[0..8].try_into().unwrap();
-        let return_type = type_arena.get_type(function.return_type);
-        let vm_val = VmValue::from_bytes(return_bytes, &return_type);
-
-        Ok(vm_val)
+        // Return value is stored in `_0`
+        Ok(runner.read_vm_value(0, function.return_type, type_arena))
     }
 
     fn new(function: &'a UirFunction) -> Self {
@@ -42,9 +39,7 @@ impl<'a> UirRunner<'a> {
 
     fn push_frame(&mut self, function_id: FunctionId) {
         let base_offset = self.memory.len();
-        // TODO: make this not a fixed 8 bytes per local
-        let frame_size = self.function.locals.len() * 8;
-        self.memory.resize(base_offset + frame_size, 0);
+        self.memory.resize(base_offset + self.function.frame_size, 0);
 
         self.frames.push(Frame {
             function_id,
@@ -62,7 +57,12 @@ impl<'a> UirRunner<'a> {
                 frame.statement_idx += 1;
                 self.step_statement(stmt)?;
 
-                println!("{:<30} {:?}", format!("{stmt}"), self.memory);
+                let mut memory_str = String::new();
+                for i in 0..self.memory.len() / 8 {
+                    write!(memory_str, "{}", self.read_int(i * 8)).unwrap();
+                    if i != self.memory.len() / 8 - 1 { write!(memory_str, " ").unwrap() }
+                }
+                println!("{:<30} [{}]", format!("{stmt}"), memory_str);
             }
             else {
                 let finished = self.step_terminator(&block.terminator)?;
@@ -79,7 +79,11 @@ impl<'a> UirRunner<'a> {
             Statement::Assign(dest_local, rvalue) => {
                 let dest_offset = self.resolve_local_offset(*dest_local);
 
-                self.evaluate_rvalue(rvalue, dest_offset)?;
+                self.evaluate_rvalue(rvalue, dest_offset, *dest_local)?;
+            }
+            Statement::Store { pointer, value } => {
+                let target_addr = self.read_pointer(self.resolve_local_offset(*pointer));
+                self.copy_operand(value, target_addr);
             }
             Statement::Nop => {}
             _ => todo!("Statement {stmt:?} not implemented yet"),
@@ -87,10 +91,10 @@ impl<'a> UirRunner<'a> {
         Ok(())
     }
 
-    fn evaluate_rvalue(&mut self, rvalue: &RValue, dest: usize) -> Result<(), ErrType> {
+    fn evaluate_rvalue(&mut self, rvalue: &RValue, dest: usize, dest_local: LocalId) -> Result<(), ErrType> {
         match rvalue {
             RValue::Use(op) => {
-                self.write_bytes(dest, &self.eval_operand_bytes(op));
+                self.copy_operand(op, dest);
             }
             RValue::BinaryOp(op, num_mode, left, right) => {
                 match num_mode {
@@ -101,14 +105,14 @@ impl<'a> UirRunner<'a> {
                             BinOp::Add => self.write_int(dest, a + b),
                             BinOp::Sub => self.write_int(dest, a - b),
                             BinOp::Mul => self.write_int(dest, a * b),
-                            BinOp::Div => self.write_int(dest, match a.checked_div(b) {
-                                Some(res) => res,
-                                None => return Err(ErrType::RuntimeError { msg: "division by zero".into() })
-                            }),
-                            BinOp::Rem => self.write_int(dest, match a.checked_rem(b) {
-                                Some(res) => res,
-                                None => return Err(ErrType::RuntimeError { msg: "division by zero".into() })
-                            }),
+                            BinOp::Div => {
+                                if b == 0 { return Err(ErrType::RuntimeError { msg: "division by zero".into() }) }
+                                self.write_int(dest, a.wrapping_div(b));
+                            }
+                            BinOp::Rem => {
+                                if b == 0 { return Err(ErrType::RuntimeError { msg: "division by zero".into() }) }
+                                self.write_int(dest, a.wrapping_rem(b));
+                            }
                             BinOp::Equal => self.write_int(dest, i64::from(a == b)),
                             BinOp::NotEqual => self.write_int(dest, i64::from(a != b)),
                             BinOp::Less => self.write_int(dest, i64::from(a < b)),
@@ -152,12 +156,59 @@ impl<'a> UirRunner<'a> {
             }
             RValue::Deref(local) => {
                 let pointer_offset = self.read_pointer(self.resolve_local_offset(*local));
+                let dest_size = self.function.locals[dest_local.0 as usize].size;
 
-                let mut bytes = [0; 8];
-                bytes.copy_from_slice(&self.memory[pointer_offset..pointer_offset + 8]);
-
-                self.write_bytes(dest, &bytes);
+                self.memory.copy_within(
+                    pointer_offset..pointer_offset + dest_size,
+                    dest,
+                );
             }
+
+
+            RValue::MakeTuple(ops) => {
+                let mut cur_offset = dest;
+                for op in ops {
+                    let size = self.operand_size(op);
+                    self.copy_operand(op, cur_offset);
+                    cur_offset += size;
+                }
+            }
+            RValue::MakeTupleArr { elem, length } => {
+                let elem_size = self.operand_size(elem);
+                for i in 0..*length {
+                    self.copy_operand(elem, dest + i * elem_size);
+                }
+            }
+
+            RValue::TupleGet { tuple, offset } => {
+                let tup_offset = self.resolve_local_offset(*tuple);
+                let dest_size = self.function.locals[dest_local.0 as usize].size;
+
+                self.memory.copy_within(
+                    tup_offset + offset..tup_offset + offset + dest_size,
+                    dest,
+                );
+            }
+            RValue::TupleGetRef { tuple, offset } => {
+                let base_ptr = self.read_pointer(self.resolve_local_offset(*tuple));
+                self.write_pointer(dest, base_ptr + offset);
+            }
+
+            RValue::IndexRef { base, index, elem_size, len } => {
+                let base_ptr = self.read_pointer(self.resolve_local_offset(*base));
+                let idx = self.eval_operand_int(index);
+
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                if idx < 0 || idx as usize >= *len {
+                    return Err(ErrType::RuntimeError {
+                        msg: format!("Index {idx} is out of bounds for arr of length {len}."),
+                    });
+                }
+
+                let idx_usize: usize = idx.try_into().unwrap();
+                self.write_pointer(dest, base_ptr + idx_usize * elem_size);
+            }
+
             _ => todo!("Rvalue {rvalue:?} not implemented yet"),
         }
         Ok(())
@@ -199,23 +250,51 @@ impl<'a> UirRunner<'a> {
     }
 
     fn resolve_local_offset(&self, local: LocalId) -> usize {
-        self.frames.last().unwrap().base_offset + (local.0 as usize) * 8
+        self.frames.last().unwrap().base_offset + self.function.locals[local.0 as usize].offset
     }
 
 
+    fn copy_operand(&mut self, op: &Operand, dest_offset: usize) {
+        match op {
+            Operand::Constant(c) => {
+                let bytes = Self::eval_constant_bytes(c);
+                self.write_bytes(dest_offset, &bytes);
+            }
+            Operand::Copy(src) | Operand::Move(src) => {
+                let src_size = self.function.locals[src.0 as usize].size;
+                let src_offset = self.resolve_local_offset(*src);
+                self.memory
+                    .copy_within(src_offset..src_offset + src_size, dest_offset);
+            }
+        }
+    }
+
+    fn operand_size(&self, op: &Operand) -> usize {
+        match op {
+            Operand::Constant(_) => 8,
+            Operand::Copy(l) | Operand::Move(l) => self.function.locals[l.0 as usize].size,
+        }
+    }
+
+    fn eval_constant_bytes(c: &Constant) -> [u8; 8] {
+        match c {
+            Constant::Int(i) => i.to_ne_bytes(),
+            Constant::Float(f) => f.to_ne_bytes(),
+            Constant::Bool(b) => i64::from(*b).to_ne_bytes(),
+            Constant::Void => [0; 8],
+            _ => [255; 8],
+        }
+    }
+
     fn eval_operand_bytes(&self, op: &Operand) -> [u8; 8] {
         match op {
-            Operand::Constant(Constant::Int(i)) => i.to_ne_bytes(),
-            Operand::Constant(Constant::Float(f)) => f.to_ne_bytes(),
-            Operand::Constant(Constant::Bool(b)) => i64::from(*b).to_ne_bytes(),
-            Operand::Constant(Constant::Void) => [0; _],
+            Operand::Constant(c) => Self::eval_constant_bytes(c),
             Operand::Copy(local) | Operand::Move(local) => {
                 let offset = self.resolve_local_offset(*local);
                 let mut bytes = [0; 8];
                 bytes.copy_from_slice(&self.memory[offset..offset + 8]);
                 bytes
             }
-            Operand::Constant(_) => todo!("Operand {op:?} not supported yet"),
         }
     }
     fn eval_operand_int(&self, op: &Operand) -> i64 {
@@ -239,8 +318,9 @@ impl<'a> UirRunner<'a> {
     }
 
     fn read_pointer(&self, offset: usize) -> usize {
-        let mut bytes = [0; 8];
-        bytes.copy_from_slice(&self.memory[offset..offset + 8]);
+        const BYTES: usize = std::mem::size_of::<usize>();
+        let mut bytes = [0; BYTES];
+        bytes.copy_from_slice(&self.memory[offset..offset + BYTES]);
         usize::from_ne_bytes(bytes)
     }
     fn read_int(&self, offset: usize) -> i64 {
@@ -253,18 +333,42 @@ impl<'a> UirRunner<'a> {
         bytes.copy_from_slice(&self.memory[offset..offset + 8]);
         f64::from_ne_bytes(bytes)
     }
-}
 
 
 
-impl VmValue {
-    #[must_use] pub fn from_bytes(bytes: [u8; 8], typ: &Type) -> Self {
-        match typ {
-            Type::Bool => Self::Bool(i64::from_ne_bytes(bytes).try_into().unwrap()),
-            Type::NumInt => Self::Int(i64::from_ne_bytes(bytes)),
-            Type::NumFloat => Self::Float(f64::from_ne_bytes(bytes)),
-            Type::Void => Self::Void,
-            _ => todo!("{typ:?} not yet handled")
+    #[must_use] pub fn read_vm_value(&self, offset: usize, type_id: TypeId, type_arena: &TypeArena) -> VmValue {
+        match type_arena.get_type(type_id) {
+            Type::NumInt => VmValue::Int(self.read_int(offset)),
+            Type::NumFloat => VmValue::Float(self.read_float(offset)),
+            Type::Bool => VmValue::Bool(self.read_int(offset) != 0),
+            Type::Void => VmValue::Void,
+            Type::CustomType(_, inner) => self.read_vm_value(offset, inner, type_arena),
+            Type::Tup(mode) => {
+                let mut vals = Vec::with_capacity(mode.len());
+                match mode {
+                    TupMode::Tup(elems) => {
+                        let mut cur_offset = offset;
+                        for elem in elems {
+                            let size = type_arena.type_size(elem.typ);
+                            vals.push(self.read_vm_value(cur_offset, elem.typ, type_arena));
+                            cur_offset += size;
+                        }
+                    }
+                    TupMode::Arr(elem, len) => {
+                        let size = type_arena.type_size(elem);
+                        for i in 0..len {
+                            vals.push(self.read_vm_value(offset + i * size, elem, type_arena));
+                        }
+                    }
+                }
+                VmValue::Tup(vals)
+            }
+            // TODO: this final dereffing should be done in the typechecker instead.
+            Type::Borrow { inner, .. } => {
+                let ptr = self.read_pointer(offset);
+                self.read_vm_value(ptr, inner, type_arena)
+            }
+            typ => todo!("{typ:?} not yet handled")
         }
     }
 }

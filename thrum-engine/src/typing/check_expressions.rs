@@ -152,7 +152,7 @@ impl TypeChecker<'_> {
 
                     let arr_inner_type = match self.prune_type_once_infer_err(inner, left_span) {
                         Type::Tup(mode) => {
-                            if mode.len() == 0 {
+                            if mode.is_empty() {
                                 self.error(ErrType::TyperCantIndexEmptyTuple { typ: self.fmt_type(inner) }, span);
                             }
 

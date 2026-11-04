@@ -68,11 +68,14 @@ impl TupMode {
         }
     }
 
-    const fn len(&self) -> usize {
+    #[must_use] pub const fn len(&self) -> usize {
         match self {
             Self::Tup(inners) => inners.len(),
             Self::Arr(_, len) => *len
         }
+    }
+    #[must_use] pub const fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     fn get(&self, index: usize) -> (Option<&str>, TypeId) {
@@ -220,8 +223,7 @@ pub struct TypeArena {
     type_dedup: HashMap<Type, TypeId>,
 }
 impl TypeArena {
-    #[must_use]
-    fn new() -> Self {
+    #[must_use] fn new() -> Self {
         let mut ta = Self { types: Vec::new(), type_dedup: HashMap::new() };
         // add the hardcoded types
         for (id, typ) in TypeId::MAP_CONSTS {
@@ -230,11 +232,11 @@ impl TypeArena {
         ta
     }
 
-    #[must_use]
-    pub fn get_type(&self, id: TypeId) -> Type { self.types[id.0 as usize].clone() }
+    #[must_use] pub fn get_type(&self, id: TypeId) -> Type {
+        self.types[id.0 as usize].clone()
+    }
 
-    #[must_use]
-    pub fn add_type(&mut self, typ: Type) -> TypeId {
+    #[must_use] pub fn add_type(&mut self, typ: Type) -> TypeId {
         if let Some(&id) = self.type_dedup.get(&typ) {
             id
         } else {
@@ -251,6 +253,17 @@ impl TypeArena {
             mutable: false,
             lifetime: Lifetime::Static
         })
+    }
+
+    #[must_use] pub fn type_size(&self, typ: TypeId) -> usize {
+        match self.get_type(typ) {
+            Type::NumInt | Type::NumFloat | Type::Bool | Type::Borrow { .. } => 8,
+            Type::Void => 0,
+            Type::CustomType(_, inner) => self.type_size(inner),
+            Type::Tup(TupMode::Tup(elems)) => elems.iter().map(|e| self.type_size(e.typ)).sum(),
+            Type::Tup(TupMode::Arr(elem, len)) => self.type_size(elem) * len,
+            _ => unreachable!(),
+        }
     }
 }
 

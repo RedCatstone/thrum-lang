@@ -1,8 +1,8 @@
 use std::fmt::{self, Display, Formatter};
 
-use crate::uir::ir::{
+use crate::{pretty_printing::slice_to_string, uir::ir::{
     AggregateKind, Constant, LocalId, Operand, RValue, Statement, Terminator, UirFunction,
-};
+}};
 
 impl Display for UirFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -50,6 +50,7 @@ impl Display for Statement {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Assign(local, rvalue) => write!(f, "{local} = {rvalue};"),
+            Self::Store { pointer, value } => write!(f, "*{pointer} = {value};"),
             Self::SetDiscriminant { local, variant_index } => {
                 write!(f, "discriminant({local}) = {variant_index};")
             }
@@ -127,6 +128,13 @@ impl Display for RValue {
                 write!(f, "&{}{local}", if *mutable { "mut " } else { "" })
             }
             Self::Deref(local) => write!(f, "({local})^"),
+
+            Self::MakeTuple(ops) => write!(f, "({})", slice_to_string(ops, ", ")),
+            Self::MakeTupleArr { elem, length } => write!(f, "({elem}; {length})"),
+            Self::TupleGet { tuple, offset } => write!(f, "{tuple}.{offset}"),
+            Self::TupleGetRef { tuple, offset } => write!(f, "{tuple}.&{offset}"),
+            Self::IndexRef { base, index, elem_size, len } => write!(f, "{base}[{index}; size: {elem_size}, len: {len}]"),
+
             Self::UseDiscriminant(place) => write!(f, "discriminant({place})"),
             Self::MakeAggregate(kind, operands) => {
                 let ops: Vec<String> = operands.iter().map(std::string::ToString::to_string).collect();
