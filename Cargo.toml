@@ -28,3 +28,4 @@ too_many_lines = "allow"  # i am like 4x over clippies limits OOOPSS lol
 derive_partial_eq_without_eq = "allow"  # don't care
 equatable_if_let = "allow"  # disagree, i think pattern matching is cleaner
 new_without_default = "allow"  # this lint is more meant for library code i think
+single_match_else = "allow"  # this lint is literally jsut annoying.

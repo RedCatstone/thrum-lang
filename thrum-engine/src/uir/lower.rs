@@ -33,7 +33,7 @@ impl<'a> FnLowerer<'a> {
 
     fn lower_function_root(&mut self, root: ExprId) {
         self.lower_expr_to_local(root, LocalId::RETURN_PLACE);
-        self.function.set_terminator(self.current_block, Terminator::Return);
+        self.set_curr_terminator(Terminator::Return);
     }
 
     /// lowers the expression so it directly ends up in `dest`.
@@ -66,8 +66,7 @@ impl<'a> FnLowerer<'a> {
                 self.add_curr_statement(Statement::Assign(dest, RValue::Use(Operand::Constant(constant))));
             }
             Expr::Void => {
-                let constant = Constant::Void;
-                self.add_curr_statement(Statement::Assign(dest, RValue::Use(Operand::Constant(constant))));
+                // void expression go brrrr
             }
 
             Expr::Infix { op, left, right, op_span: _ } => {
@@ -91,12 +90,6 @@ impl<'a> FnLowerer<'a> {
                         let _discard_temp = self.new_temp_expr(*expr);
                     }
                     self.lower_expr_to_local(*last, dest);
-                }
-                else {
-                    self.add_curr_statement(Statement::Assign(
-                        dest,
-                        RValue::Use(Operand::Constant(Constant::Void)),
-                    ));
                 }
             }
 
@@ -134,20 +127,11 @@ impl<'a> FnLowerer<'a> {
                     let val_place = self.new_temp_expr(*value);
                     self.lower_pattern(*pattern, val_place, None);
                 }
-
-                self.add_curr_statement(Statement::Assign(
-                    dest,
-                    RValue::Use(Operand::Constant(Constant::Void)),
-                ));
             }
 
             Expr::EmptyLet { pattern } => {
                 let var_id = self.typed_ast.resolved_pattern_var[pattern];
                 self.get_or_create_local(var_id);
-                self.add_curr_statement(Statement::Assign(
-                    dest,
-                    RValue::Use(Operand::Constant(Constant::Void)),
-                ));
             }
 
             Expr::IdentifierRef { .. } => {
@@ -234,7 +218,7 @@ impl<'a> FnLowerer<'a> {
                 let alt_block = self.function.new_block();
                 let after_if_block = self.function.new_block();
 
-                self.function.set_terminator(self.current_block, Terminator::MatchOnInt {
+                self.set_curr_terminator(Terminator::MatchOnInt {
                     discr: condition_op,
                     targets: vec![(1, then_block)],
                     otherwise: alt_block
@@ -242,11 +226,11 @@ impl<'a> FnLowerer<'a> {
 
                 self.current_block = then_block;
                 self.lower_expr_to_local(*then, dest);
-                self.function.set_terminator(then_block, Terminator::Goto(after_if_block));
+                self.set_curr_terminator(Terminator::Goto(after_if_block));
 
                 self.current_block = alt_block;
                 self.lower_expr_to_local(*alt, dest);
-                self.function.set_terminator(alt_block, Terminator::Goto(after_if_block));
+                self.set_curr_terminator(Terminator::Goto(after_if_block));
 
                 self.current_block = after_if_block;
             }
@@ -255,26 +239,57 @@ impl<'a> FnLowerer<'a> {
                 let value_local = self.new_temp_expr(*match_value);
                 let after_match_block = self.function.new_block();
 
-                let curr_arm = self.function.new_block();
-
                 for (i, arm) in arms.iter().enumerate() {
-                    let arm_body_block = self.function.new_block();
-                    let next_arm_block = self.function.new_block();
+                    let isnt_last = i + 1 != arms.len();
+                    let target_blocks = if isnt_last {
+                        Some((self.function.new_block(), self.function.new_block()))
+                    } else {
+                        None
+                    };
 
-                    self.lower_pattern(arm.pattern, value_local, Some((arm_body_block, next_arm_block)));
+                    self.lower_pattern(arm.pattern, value_local, target_blocks);
 
-                    self.current_block = arm_body_block;
+                    if let Some((arm_body_block, _)) = target_blocks {
+                        self.current_block = arm_body_block;
+                    }
                     self.lower_expr_to_local(arm.body, dest);
-                    self.function.set_terminator(self.current_block, Terminator::Goto(after_match_block));
+                    self.set_curr_terminator(Terminator::Goto(after_match_block));
 
-                    // Advance to test the next arm
-                    self.current_block = next_arm_block;
-
-                    let is_last = i + 1 == arms.len();
-                    if is_last {
-                        self.function.set_terminator(next_arm_block, Terminator::Unreachable);
+                    // Advance to test the next arm (if there is one)
+                    if let Some((_, next_arm_block)) = target_blocks {
+                        self.current_block = next_arm_block;
                     }
                 }
+
+                self.current_block = after_match_block;
+            }
+
+            Expr::Is { value, pattern } => {
+                let val_local = self.new_temp_expr(*value);
+
+                let success_block = self.function.new_block();
+                let failure_block = self.function.new_block();
+                let after_is_block = self.function.new_block();
+
+                self.lower_pattern(*pattern, val_local, Some((success_block, failure_block)));
+
+                // Matched!
+                self.current_block = success_block;
+                self.add_curr_statement(Statement::Assign(
+                    dest,
+                    RValue::Use(Operand::Constant(Constant::Bool(true))),
+                ));
+                self.set_curr_terminator(Terminator::Goto(after_is_block));
+
+                // Failed!
+                self.current_block = failure_block;
+                self.add_curr_statement(Statement::Assign(
+                    dest,
+                    RValue::Use(Operand::Constant(Constant::Bool(false))),
+                ));
+                self.set_curr_terminator(Terminator::Goto(after_is_block));
+
+                self.current_block = after_is_block;
             }
 
             other => todo!("support for {other:?} not yet implemented"),
@@ -344,6 +359,9 @@ impl<'a> FnLowerer<'a> {
     fn add_curr_statement(&mut self, stmt: Statement) {
         self.function.add_statement(self.current_block, stmt);
     }
+    fn set_curr_terminator(&mut self, term: Terminator) {
+        self.function.set_terminator(self.current_block, term);
+    }
 
 
     fn num_mode_for_type(&self, typ: TypeId) -> NumMode {
@@ -371,49 +389,101 @@ impl<'a> FnLowerer<'a> {
             current_type = inner;
         }
 
-        let go_success = || if let Some((success_block, _)) = success_fail_block {
-            self.function.set_terminator(self.current_block, Terminator::Goto(success_block));
-        };
-        let go_fail = || if let Some((_, fail_block)) = success_fail_block {
-            self.function.set_terminator(self.current_block, Terminator::Goto(fail_block));
-        };
+        let new_val_local = current_val;
 
+        // default the block terminator to jump to success_block if there is any.
+        if let Some((success_block, _)) = success_fail_block {
+            self.set_curr_terminator(Terminator::Goto(success_block));
+        }
 
         match self.ast.get_pattern(pattern) {
             Pattern::Binding { .. } => {
                 let var_id = self.typed_ast.resolved_pattern_var[&pattern];
                 let local = self.get_or_create_local(var_id);
 
-                self.add_curr_statement(Statement::Assign(local, RValue::Use(Operand::Copy(val_local))));
-                go_success();
+                self.add_curr_statement(Statement::Assign(local, RValue::Use(Operand::Copy(new_val_local))));
             }
 
             Pattern::Wildcard => {
                 // Wildcard go brrrr
-                go_success();
             }
 
             Pattern::CompareExpr(expr) => {
-                let expr_op = self.lower_expr_to_operand(*expr);
-                let val_type = self.function.locals[current_val.0 as usize].type_id;
-                let num_mode = self.num_mode_for_type(val_type);
+                if let Some((success_block, fail_block)) = success_fail_block {
+                    let expr_op = self.lower_expr_to_operand(*expr);
+                    let val_type = self.function.locals[current_val.0 as usize].type_id;
+                    let num_mode = self.num_mode_for_type(val_type);
 
-                let cmp_temp = self.new_temp_of_type(TypeId::BOOL);
-                self.add_curr_statement(Statement::Assign(
-                    cmp_temp,
-                    RValue::BinaryOp(BinOp::Equal, num_mode, Operand::Copy(current_val), expr_op),
-                ));
+                    let cmp_temp = self.new_temp_of_type(TypeId::BOOL);
+                    self.add_curr_statement(Statement::Assign(
+                        cmp_temp,
+                        RValue::BinaryOp(BinOp::Equal, num_mode, Operand::Copy(current_val), expr_op),
+                    ));
 
-                let (success_block, failure_block) = success_fail_block.unwrap();
-                self.function.set_terminator(self.current_block, Terminator::MatchOnInt {
-                    discr: Operand::Copy(cmp_temp),
+                    self.set_curr_terminator(Terminator::MatchOnInt {
+                        discr: Operand::Copy(cmp_temp),
+                        targets: vec![(1, success_block)],
+                        otherwise: fail_block,
+                    });
+                } else {
+                    // if the pattern is expected to not fail, it doesn't need to compile anything here
+                    // example: `let true | false = true`
+                }
+            }
+
+            Pattern::Or(patterns) => {
+                let success_block = match success_fail_block {
+                    Some((s, _)) => s,
+                    None => self.function.new_block()
+                };
+
+                for (i, &pat) in patterns.iter().enumerate() {
+                    let is_last = i + 1 == patterns.len();
+
+                    let target_blocks = if is_last {
+                        match success_fail_block {
+                            Some((s, f)) => Some((s, f)),
+                            None => {
+                                self.set_curr_terminator(Terminator::Goto(success_block));
+                                None
+                            }
+                        }
+                    } else {
+                        Some((success_block, self.function.new_block()))
+                    };
+
+                    self.lower_pattern(pat, current_val, target_blocks);
+
+                    if let Some((_, fail_next_block)) = target_blocks {
+                        self.current_block = fail_next_block;
+                    }
+                }
+
+                self.current_block = success_block;
+            }
+
+            Pattern::Conditional { pattern, cond } => {
+                let (success_block, fail_block) = success_fail_block.unwrap();
+                let cond_block = self.function.new_block();
+
+                self.lower_pattern(*pattern, new_val_local, Some((cond_block, fail_block)));
+
+                self.current_block = cond_block;
+                let cond_op = self.lower_expr_to_operand(*cond);
+
+                self.set_curr_terminator(Terminator::MatchOnInt {
+                    discr: cond_op,
                     targets: vec![(1, success_block)],
-                    otherwise: failure_block,
+                    otherwise: fail_block,
                 });
             }
 
+            Pattern::Not(pattern) => {
+                self.lower_pattern(*pattern, new_val_local, success_fail_block.map(|(s, f)| (f, s)));
+            }
+
             Pattern::Tuple(elems) => {
-                let val_local_type = self.function.locals[val_local.0 as usize].type_id;
+                let val_local_type = self.function.locals[new_val_local.0 as usize].type_id;
                 let mut offset = 0;
 
                 for (i, elem) in elems.iter().enumerate() {
@@ -423,11 +493,28 @@ impl<'a> FnLowerer<'a> {
 
                     self.add_curr_statement(Statement::Assign(
                         elem_local,
-                        RValue::TupleGet { tuple: val_local, offset },
+                        RValue::TupleGet { tuple: new_val_local, offset },
                     ));
                     offset += elem_size;
 
-                    self.lower_pattern(elem.pattern, elem_local);
+                    let is_last = i + 1 == elems.len();
+
+                    // If we have a failure block, each element must jump to the next element block
+                    // or to the failure block if it doesn't match.
+                    let elem_targets = match success_fail_block {
+                        Some((success_block, fail_block)) => {
+                            let next_elem_block = if is_last { success_block } else { self.function.new_block() };
+                            Some((next_elem_block, fail_block))
+                        }
+                        None => None  // no blocks added if no branches can fail!
+                    };
+
+                    self.lower_pattern(elem.pattern, elem_local, elem_targets);
+
+                    if let Some((next_elem_block, _)) = elem_targets
+                    && !is_last {
+                        self.current_block = next_elem_block;
+                    }
                 }
             }
 
@@ -435,8 +522,12 @@ impl<'a> FnLowerer<'a> {
                 let ptr_local = self.new_temp_expr(*expr);
                 self.add_curr_statement(Statement::Store {
                     pointer: ptr_local,
-                    value: Operand::Copy(val_local),
+                    value: Operand::Copy(new_val_local),
                 });
+            }
+
+            Pattern::Typed { pattern, typ: _ } => {
+                self.lower_pattern(*pattern, val_local, success_fail_block);
             }
 
             x => todo!("{x:?} not yet implemented...")
