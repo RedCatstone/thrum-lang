@@ -36,7 +36,7 @@ impl Display for UirFunction {
 }
 
 impl UirFunction {
-    pub fn format_block_name(&self, i: usize) -> String {
+    #[must_use] pub fn format_block_name(&self, i: usize) -> String {
         format!("block{i}({})", self.blocks[i].debug_name)
     }
 

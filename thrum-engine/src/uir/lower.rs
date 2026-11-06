@@ -10,38 +10,81 @@ pub struct FnLowerer<'a> {
     ast: &'a AstArena,
     typed_ast: &'a TypedAst,
     type_arena: &'a TypeArena,
-    function: UirFunction,
+    functions: &'a mut Vec<CompilingStatus>,
+    curr_function: UirFunction,
     current_block: BlockId,
     var_to_local: HashMap<TypeVarId, LocalId>,
     loop_infos: HashMap<ExprId, (BlockId, BlockId, LocalId)>,
 }
 
+#[derive(Debug)]
+pub enum CompilingStatus {
+    NotCompiled(ExprId),
+    Compiling,
+    Compiled(UirFunction)
+}
+impl CompilingStatus {
+    #[must_use] pub fn its_compiled(&self) -> &UirFunction {
+        match self {
+            Self::Compiled(f) => f,
+            _ => unreachable!("well, it wasn't compiled.")
+        }
+    }
+}
+
 impl<'a> FnLowerer<'a> {
-    #[must_use] pub fn start(ast: &'a AstArena, typed_ast: &'a TypedAst, type_arena: &'a TypeArena) -> UirFunction {
-        let mut lowerer = Self::new(ast, typed_ast, type_arena);
-        lowerer.lower_function_root(ExprId(0));
-        lowerer.function
+    pub fn start(ast: &'a AstArena, typed_ast: &'a TypedAst, type_arena: &'a TypeArena, compiled_functions: &'a mut Vec<CompilingStatus>) {
+        let mut lowerer = Self::new(ast, typed_ast, type_arena, compiled_functions);
+        let return_type = typed_ast.get_expr_type(ExprId(0));
+        lowerer.lower_function(&[], 0, return_type);
     }
 
-    fn new(ast: &'a AstArena, typed_ast: &'a TypedAst, type_arena: &'a TypeArena) -> Self {
+    fn new(ast: &'a AstArena, typed_ast: &'a TypedAst, type_arena: &'a TypeArena, compiled_functions: &'a mut Vec<CompilingStatus>) -> Self {
         let return_type = typed_ast.get_expr_type(ExprId(0));
         let return_size = type_arena.type_size(return_type);
-        let function = UirFunction::new(FunctionId(0), "main".to_string(), 0, return_type, return_size);
-        let current_block = function.entry_block;
+        let curr_function = UirFunction::new(FunctionId(0), "main".to_string(), 0, return_type, return_size);
 
-        Self { ast, typed_ast, type_arena, function, current_block, var_to_local: HashMap::new(), loop_infos: HashMap::new() }
+        Self {
+            ast, typed_ast, type_arena, functions: compiled_functions,
+            current_block: curr_function.entry_block,
+            curr_function,
+            var_to_local: HashMap::new(),
+            loop_infos: HashMap::new()
+        }
     }
 
-    fn lower_function_root(&mut self, root: ExprId) {
-        self.lower_expr_to_local(root, LocalId::RETURN_PLACE);
+    fn lower_function(&mut self, params: &[PatternId], slot: usize, return_type: TypeId) {
+        let CompilingStatus::NotCompiled(body) = self.functions[slot] else {
+            unreachable!("not an uncompiled function: {:?}", self.functions[slot])
+        };
+        self.functions[slot] = CompilingStatus::Compiling;
+
+        let new_fn = UirFunction::new(
+            FunctionId(slot.try_into().unwrap()),
+            "new_fn".to_string(),
+            params.len(),
+            return_type,
+            self.type_arena.type_size(return_type)
+        );
+
+        let old_fn = std::mem::replace(&mut self.curr_function, new_fn);
+        let old_block = std::mem::replace(&mut self.current_block, BlockId(0));
+
+        self.lower_expr_to_local(body, LocalId::RETURN_PLACE);
         self.set_curr_terminator(Terminator::Return);
+
+        let new_fn = std::mem::replace(&mut self.curr_function, old_fn);
+        self.current_block = old_block;
+
+        assert!(matches!(self.functions[slot], CompilingStatus::Compiling));
+        self.functions[slot] = CompilingStatus::Compiled(new_fn);
     }
 
     /// lowers the expression so it directly ends up in `dest`.
     fn lower_expr_to_local(&mut self, expr_id: ExprId, dest: LocalId) {
         let deref_count = self.typed_ast.auto_derefs.get(&expr_id);
         let temp_dest = if deref_count.is_some() {
-            self.function.new_temp(TypeId::INT, 8)
+            self.curr_function.new_temp(TypeId::INT, 8)
         } else {
             dest
         };
@@ -52,7 +95,7 @@ impl<'a> FnLowerer<'a> {
         if let Some(&derefs) = deref_count {
             let mut curr = temp_dest;
             for i in 0..derefs {
-                let target = if i + 1 == derefs { dest } else { self.function.new_temp(TypeId::INT, 8) };
+                let target = if i + 1 == derefs { dest } else { self.curr_function.new_temp(TypeId::INT, 8) };
                 self.add_curr_statement(Statement::Assign(target, RValue::Deref(curr)));
                 curr = target;
             }
@@ -257,9 +300,9 @@ impl<'a> FnLowerer<'a> {
             Expr::If { condition, then, alt, never_alt: _ } => {
                 let condition_op = self.lower_expr_to_operand(*condition);
 
-                let then_block = self.function.new_block("if_then");
-                let alt_block = self.function.new_block("if_alt");
-                let after_if_block = self.function.new_block("after_if");
+                let then_block = self.curr_function.new_block("if_then");
+                let alt_block = self.curr_function.new_block("if_alt");
+                let after_if_block = self.curr_function.new_block("after_if");
 
                 self.set_curr_terminator(Terminator::MatchOnInt {
                     discr: condition_op,
@@ -279,8 +322,8 @@ impl<'a> FnLowerer<'a> {
             }
 
             Expr::Loop { body, label: _ } => {
-                let loop_body = self.function.new_block("loop_body");
-                let after_loop = self.function.new_block("after_loop");
+                let loop_body = self.curr_function.new_block("loop_body");
+                let after_loop = self.curr_function.new_block("after_loop");
 
                 self.loop_infos.insert(expr_id, (loop_body, after_loop, dest));
 
@@ -311,12 +354,12 @@ impl<'a> FnLowerer<'a> {
 
             Expr::Match { match_value, arms } => {
                 let value_local = self.new_temp_expr(*match_value);
-                let after_match_block = self.function.new_block("after_match");
+                let after_match_block = self.curr_function.new_block("after_match");
 
                 for (i, arm) in arms.iter().enumerate() {
                     let isnt_last = i + 1 != arms.len();
                     let target_blocks = if isnt_last {
-                        Some((self.function.new_block("arm_success"), self.function.new_block("arm_fail")))
+                        Some((self.curr_function.new_block("arm_success"), self.curr_function.new_block("arm_fail")))
                     } else {
                         None
                     };
@@ -341,9 +384,9 @@ impl<'a> FnLowerer<'a> {
             Expr::Is { value, pattern } => {
                 let val_local = self.new_temp_expr(*value);
 
-                let success_block = self.function.new_block("is_success");
-                let failure_block = self.function.new_block("is_fail");
-                let after_is_block = self.function.new_block("after_is");
+                let success_block = self.curr_function.new_block("is_success");
+                let failure_block = self.curr_function.new_block("is_fail");
+                let after_is_block = self.curr_function.new_block("after_is");
 
                 self.lower_pattern(*pattern, val_local, Some((success_block, failure_block)));
 
@@ -398,7 +441,7 @@ impl<'a> FnLowerer<'a> {
 
     fn new_temp_of_type(&mut self, typ: TypeId) -> LocalId {
         let size = self.type_arena.type_size(typ);
-        self.function.new_temp(typ, size)
+        self.curr_function.new_temp(typ, size)
     }
 
     fn get_or_create_local(&mut self, var_id: TypeVarId) -> LocalId {
@@ -407,7 +450,7 @@ impl<'a> FnLowerer<'a> {
         } else {
             let var = self.typed_ast.get_var(var_id);
             let size = self.type_arena.type_size(var.typ);
-            let l = self.function.new_local(
+            let l = self.curr_function.new_local(
                 var.typ,
                 size,
                 Some(var.name.clone().into_boxed_str()),
@@ -437,10 +480,10 @@ impl<'a> FnLowerer<'a> {
     }
 
     fn add_curr_statement(&mut self, stmt: Statement) {
-        self.function.add_statement(self.current_block, stmt);
+        self.curr_function.add_statement(self.current_block, stmt);
     }
     fn set_curr_terminator(&mut self, term: Terminator) {
-        self.function.set_terminator(self.current_block, term);
+        self.curr_function.set_terminator(self.current_block, term);
     }
 
 
@@ -457,7 +500,7 @@ impl<'a> FnLowerer<'a> {
     fn lower_pattern(&mut self, pattern: PatternId, val_local: LocalId, success_fail_block: Option<(BlockId, BlockId)>) {
         let pointer_count = self.typed_ast.resolved_pattern_derefs.get(&pattern).copied().unwrap_or(0);
         let mut current_val = val_local;
-        let mut current_type = self.function.locals[val_local.0 as usize].type_id;
+        let mut current_type = self.curr_function.locals[val_local.0 as usize].type_id;
 
         for _ in 0..pointer_count {
             let Type::Borrow { inner, .. } = self.type_arena.get_type(current_type) else {
@@ -486,7 +529,7 @@ impl<'a> FnLowerer<'a> {
             Pattern::CompareExpr(expr) => {
                 if let Some((success_block, fail_block)) = success_fail_block {
                     let expr_op = self.lower_expr_to_operand(*expr);
-                    let val_type = self.function.locals[current_val.0 as usize].type_id;
+                    let val_type = self.curr_function.locals[current_val.0 as usize].type_id;
                     let num_mode = self.num_mode_for_type(val_type);
 
                     let cmp_temp = self.new_temp_of_type(TypeId::BOOL);
@@ -509,7 +552,7 @@ impl<'a> FnLowerer<'a> {
             Pattern::Or(patterns) => {
                 let success_block = match success_fail_block {
                     Some((s, _)) => s,
-                    None => self.function.new_block("or_full_success")
+                    None => self.curr_function.new_block("or_full_success")
                 };
 
                 for (i, &pat) in patterns.iter().enumerate() {
@@ -524,7 +567,7 @@ impl<'a> FnLowerer<'a> {
                             }
                         }
                     } else {
-                        Some((success_block, self.function.new_block("pattern_or_next")))
+                        Some((success_block, self.curr_function.new_block("pattern_or_next")))
                     };
 
                     self.lower_pattern(pat, current_val, target_blocks);
@@ -539,7 +582,7 @@ impl<'a> FnLowerer<'a> {
 
             Pattern::Conditional { pattern, cond } => {
                 let (success_block, fail_block) = success_fail_block.unwrap();
-                let cond_block = self.function.new_block("cond_pattern");
+                let cond_block = self.curr_function.new_block("cond_pattern");
 
                 self.lower_pattern(*pattern, new_val_local, Some((cond_block, fail_block)));
 
@@ -558,7 +601,7 @@ impl<'a> FnLowerer<'a> {
             }
 
             Pattern::Tuple(elems) => {
-                let val_local_type = self.function.locals[new_val_local.0 as usize].type_id;
+                let val_local_type = self.curr_function.locals[new_val_local.0 as usize].type_id;
                 let mut offset = 0;
 
                 for (i, elem) in elems.iter().enumerate() {
@@ -578,7 +621,7 @@ impl<'a> FnLowerer<'a> {
                     // or to the failure block if it doesn't match.
                     let elem_targets = match success_fail_block {
                         Some((success_block, fail_block)) => {
-                            let next_elem_block = if is_last { success_block } else { self.function.new_block("pattern_tup_next") };
+                            let next_elem_block = if is_last { success_block } else { self.curr_function.new_block("pattern_tup_next") };
                             Some((next_elem_block, fail_block))
                         }
                         None => None  // no blocks added if no branches can fail!
@@ -600,7 +643,7 @@ impl<'a> FnLowerer<'a> {
                     let discr_temp = self.new_temp_of_type(TypeId::INT);
                     self.add_curr_statement(Statement::Assign(discr_temp, RValue::ReadDiscriminant(current_val)));
 
-                    let payload_check_block = self.function.new_block("pattern_enum_payload");
+                    let payload_check_block = self.curr_function.new_block("pattern_enum_payload");
 
                     self.set_curr_terminator(Terminator::MatchOnInt {
                         discr: Operand::Copy(discr_temp),

@@ -1,12 +1,12 @@
 use simply_colored::{RESET, YELLOW};
 use crate::{
-    ErrType, parsing::ast::{BinOp, UnaryOp}, typing::{TupMode, Type, TypeArena, TypeId}, uir::ir::{
-        BlockId, Constant, FunctionId, LocalId, Operand, RValue, Statement, Terminator, UirFunction,
-    }, vm_compiling::{NumMode, VmValue},
+    ErrType, parsing::ast::{BinOp, UnaryOp}, typing::{TupMode, Type, TypeArena, TypeId}, uir::{ir::{
+        BlockId, Constant, FunctionId, LocalDecl, LocalId, Operand, RValue, Statement, Terminator,
+    }, lower::CompilingStatus}, vm_compiling::{NumMode, VmValue},
 };
 
 pub struct UirRunner<'a> {
-    function: &'a UirFunction,
+    functions: &'a [CompilingStatus],
     memory: Vec<u8>,
     frames: Vec<Frame>,
 }
@@ -19,27 +19,24 @@ struct Frame {
 }
 
 impl<'a> UirRunner<'a> {
-    pub fn start(function: &'a UirFunction, type_arena: &TypeArena) -> Result<VmValue, ErrType> {
-        let mut runner = Self::new(function);
-        runner.run()?;
-
-        // Return value is stored in `_0`
-        Ok(runner.read_vm_value(0, function.return_type, type_arena))
-    }
-
-    fn new(function: &'a UirFunction) -> Self {
+    pub fn start(functions: &'a [CompilingStatus], entry_slot: FunctionId, type_arena: &TypeArena) -> Result<VmValue, ErrType> {
         let mut runner = Self {
-            function,
+            functions,
             memory: Vec::new(),
             frames: Vec::new(),
         };
-        runner.push_frame(function.id);
-        runner
+        runner.push_frame(entry_slot);
+        runner.run()?;
+
+        // Return value is stored in `_0`
+        let return_type = functions[entry_slot.0 as usize].its_compiled().return_type;
+        Ok(runner.read_vm_value(0, return_type, type_arena))
     }
 
     fn push_frame(&mut self, function_id: FunctionId) {
         let base_offset = self.memory.len();
-        self.memory.resize(base_offset + self.function.frame_size, 0);
+        let frame_size = self.functions[function_id.0 as usize].its_compiled().frame_size;
+        self.memory.resize(base_offset + frame_size, 0);
 
         self.frames.push(Frame {
             function_id,
@@ -51,7 +48,8 @@ impl<'a> UirRunner<'a> {
 
     fn run(&mut self) -> Result<(), ErrType> {
         while let Some(frame) = self.frames.last_mut() {
-            let block = &self.function.blocks[frame.current_block.0 as usize];
+            let curr_fn = self.functions[frame.function_id.0 as usize].its_compiled();
+            let block = &curr_fn.blocks[frame.current_block.0 as usize];
 
             if let Some(stmt) = block.statements.get(frame.statement_idx) {
                 frame.statement_idx += 1;
@@ -71,7 +69,7 @@ impl<'a> UirRunner<'a> {
                     println!();
                     break
                 }
-                println!("{YELLOW}--> {}{RESET}", self.function.format_block_name(self.frames.last().unwrap().current_block.0 as usize));
+                println!("{YELLOW}--> {}{RESET}", curr_fn.format_block_name(self.frames.last().unwrap().current_block.0 as usize));
             }
         }
         Ok(())
@@ -163,7 +161,7 @@ impl<'a> UirRunner<'a> {
             }
             RValue::Deref(local) => {
                 let pointer_offset = self.read_pointer(self.resolve_local_offset(*local));
-                let dest_size = self.function.locals[dest_local.0 as usize].size;
+                let dest_size = self.get_local(dest_local).size;
 
                 self.memory.copy_within(
                     pointer_offset..pointer_offset + dest_size,
@@ -189,7 +187,7 @@ impl<'a> UirRunner<'a> {
 
             RValue::TupleGet { tuple, offset } => {
                 let tup_offset = self.resolve_local_offset(*tuple);
-                let dest_size = self.function.locals[dest_local.0 as usize].size;
+                let dest_size = self.get_local(dest_local).size;
 
                 self.memory.copy_within(
                     tup_offset + offset..tup_offset + offset + dest_size,
@@ -268,8 +266,15 @@ impl<'a> UirRunner<'a> {
         }
     }
 
+
     fn resolve_local_offset(&self, local: LocalId) -> usize {
-        self.frames.last().unwrap().base_offset + self.function.locals[local.0 as usize].offset
+        self.frames.last().unwrap().base_offset + self.get_local(local).offset
+    }
+
+    fn get_local(&self, local: LocalId) -> &LocalDecl {
+        let frame = self.frames.last().unwrap();
+        let function = self.functions[frame.function_id.0 as usize].its_compiled();
+        &function.locals[local.0 as usize]
     }
 
 
@@ -282,7 +287,7 @@ impl<'a> UirRunner<'a> {
                 self.write_bytes(dest_offset, &bytes);
             }
             Operand::Copy(src) | Operand::Move(src) => {
-                let src_size = self.function.locals[src.0 as usize].size;
+                let src_size = self.get_local(*src).size;
                 let src_offset = self.resolve_local_offset(*src);
                 self.memory
                     .copy_within(src_offset..src_offset + src_size, dest_offset);
@@ -294,7 +299,7 @@ impl<'a> UirRunner<'a> {
         match op {
             Operand::Constant(Constant::Void) => 0,
             Operand::Constant(_) => 8,
-            Operand::Copy(l) | Operand::Move(l) => self.function.locals[l.0 as usize].size,
+            Operand::Copy(l) | Operand::Move(l) => self.get_local(*l).size,
         }
     }
 

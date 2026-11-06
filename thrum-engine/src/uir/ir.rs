@@ -18,7 +18,6 @@ pub struct UirFunction {
 impl UirFunction {
     #[must_use]
     pub fn new(id: FunctionId, name: String, param_count: usize, return_type: TypeId, return_size: usize) -> Self {
-        let return_slot_size = return_size.max(8);
         Self {
             id, name, param_count, return_type,
             locals: vec![
@@ -26,12 +25,12 @@ impl UirFunction {
                     id: LocalId::RETURN_PLACE,
                     type_id: return_type,
                     offset: 0,
-                    size: return_slot_size,
+                    size: return_size,
                     debug_name: Some("_0".into()),
                     is_mut: true,
                 }
             ],
-            frame_size: return_slot_size,
+            frame_size: return_size,
             blocks: vec![BasicBlock::new("entry")],
             entry_block: BlockId(0),
         }
@@ -104,7 +103,7 @@ pub enum Constant {
     NativeFn(String),
 }
 impl Constant {
-    pub fn from_val(val: &AstValue) -> Self {
+    #[must_use] pub fn from_val(val: &AstValue) -> Self {
         match val {
             AstValue::NumInt(x) => Self::Int(*x),
             AstValue::NumFloat(x) => Self::Float(*x),

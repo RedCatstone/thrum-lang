@@ -3,7 +3,7 @@ use std::{fmt::Display, time::Instant};
 use derive_more::Display;
 use simply_colored::{BOLD, GREEN, RED, RESET, YELLOW};
 
-use crate::{lexing::tokens::{Span, TokenKind}, parsing::ast::ExprId, pretty_printing::{format_program_error, slice_to_or_string, slice_to_string}, typing::type_vars::TypeVar, vm_compiling::VmValue};
+use crate::{lexing::tokens::{Span, TokenKind}, parsing::ast::ExprId, pretty_printing::{format_program_error, slice_to_debug_string, slice_to_or_string, slice_to_string}, typing::type_vars::TypeVar, uir::ir::FunctionId, vm_compiling::VmValue};
 
 pub mod lexing;
 pub mod typing;
@@ -252,15 +252,13 @@ pub fn run_code(source_code: &str) -> (Result<VmValue, Vec<ErrType>>, Vec<WarnTy
     let (typed_ast, mut compiled_functions, type_arena) = typing::TypeChecker::start(&mut err_data, &ast);
     bail_on_err!(stage_complete("Typechecker", ""/*&format!("typed_ast: {typed_ast:?}")*/, &err_data, &source_data));
 
-    // vm_compiling::VmCompiler::start(&ast, &typed_ast, &mut compiled_functions);
-    let uir_fn = uir::lower::FnLowerer::start(&ast, &typed_ast, &type_arena);
-    bail_on_err!(stage_complete("VmCompiler", &format!("{uir_fn}"), &ProgramErrorData::new(), &source_data));
+    uir::lower::FnLowerer::start(&ast, &typed_ast, &type_arena, &mut compiled_functions);
+    bail_on_err!(stage_complete("VmCompiler", &slice_to_debug_string(&compiled_functions, "\n"), &ProgramErrorData::new(), &source_data));
 
     let warnings = err_data.warnings.iter().map(|x| x.err_type.clone()).collect();
     let execution_start = Instant::now();
 
-    // let result = unsafe { VM::start(&mut compiled_functions, None, 0) };
-    let result = uir::runner::UirRunner::start(&uir_fn, &type_arena);
+    let result = uir::runner::UirRunner::start(&compiled_functions, FunctionId(0), &type_arena);
 
     let timer_str = format!("({GREEN}{:?}{RESET}, {GREEN}{:?}{RESET})",
         execution_start.duration_since(compile_start),

@@ -1,10 +1,11 @@
 use std::{collections::{HashMap, HashSet}, fmt::{self, Write}};
 
 use crate::{
-    ErrType, ProgramError, ProgramErrorData, WarnType, lexing::tokens::Span, nativelib::get_native_lib,
+    ErrType, ProgramError, ProgramErrorData, WarnType,
+    lexing::tokens::Span, nativelib::get_native_lib,
     parsing::ast::{AstArena, AstIds, ExprId, PatternId},
     typing::{check_expressions::CheckExprCtx, type_vars::{SnapshotVarsState, TypeVar, TypeVarIsUsed, TypeVarScope}},
-    vm_compiling::{FunctionRegistry, NumMode, VmFormatArgDisplayFn, VmValue}
+    uir::lower::CompilingStatus, vm_compiling::{FunctionRegistry, NumMode, VmFormatArgDisplayFn, VmValue}
 };
 
 pub mod type_vars;
@@ -212,10 +213,10 @@ impl TypedAst {
 
 #[derive(Debug)]
 pub struct TypeArena {
-    /// indexed with TypeId
+    /// indexed with `TypeId`
     pub types: Vec<Type>,
 
-    /// indexed with EnumId
+    /// indexed with `EnumId`
     pub enum_defs: Vec<EnumDefinition>,
 
     // duplicate types should get the same id
@@ -328,7 +329,7 @@ pub enum UnifyMode {
 }
 
 impl TypeChecker<'_> {
-    pub fn start(error_data: &mut ProgramErrorData, ast: &AstArena) -> (TypedAst, FunctionRegistry, TypeArena) {
+    pub fn start(error_data: &mut ProgramErrorData, ast: &AstArena) -> (TypedAst, Vec<CompilingStatus>, TypeArena) {
         let mut tc = TypeChecker {
             error_data, ast,
             typed_ast: TypedAst::new(ast.exprs.len()),
@@ -351,7 +352,8 @@ impl TypeChecker<'_> {
 
         tc.finalize_types_and_vars();
 
-        (tc.typed_ast, tc.compiled_functions, tc.type_arena)
+        let lower_compiled_functions = vec![CompilingStatus::NotCompiled(ExprId(0))];
+        (tc.typed_ast, lower_compiled_functions, tc.type_arena)
     }
 
     #[track_caller]
