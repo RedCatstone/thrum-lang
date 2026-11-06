@@ -796,7 +796,7 @@ impl VmCompiler<'_> {
                     ResolvedTypeInstantiation::Tuple => {
                         self.compile_expression(*data);
                     }
-                    ResolvedTypeInstantiation::EnumVariant(i) => {
+                    ResolvedTypeInstantiation::EnumVariant(i, _) => {
                         self.compile_enum_variant(i, Some(*data));
                     }
                 }
@@ -830,7 +830,7 @@ impl VmCompiler<'_> {
                     | ResolvedMemberAccess::MemberWithSelfSugar { constant, .. } => {
                         self.push_get_constant_ref_op(constant.clone());
                     }
-                    ResolvedMemberAccess::EnumWithNoData { i } => {
+                    ResolvedMemberAccess::EnumWithNoData { i, enum_id: _ } => {
                         self.compile_enum_variant(*i, None);
                     }
                 }

@@ -161,25 +161,14 @@ pub enum RValue {
     TupleGetRef { tuple: LocalId, offset: usize },
     IndexRef { base: LocalId, index: Operand, elem_size: usize, len: usize },
 
-    UseDiscriminant(LocalId),
-    MakeAggregate(AggregateKind, Vec<Operand>),
+    // Enums
+    MakeEnum { enum_id: EnumId, variant_index: usize, payload: Operand },
+    ReadDiscriminant(LocalId),
+    SetDiscriminant(LocalId, Operand),
+
     MakeSlice { ptr: Operand, len: Operand },
     GetLen(LocalId),
     Cast { operand: Operand, target_type: TypeId },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum AggregateKind {
-    Tuple,
-    Array,
-    Enum {
-        enum_id: EnumId,
-        variant_index: usize,
-    },
-    FormatString {
-        display_fns: Vec<VmFormatArgDisplayFn>,
-        str_pieces: Vec<String>,
-    },
 }
 
 

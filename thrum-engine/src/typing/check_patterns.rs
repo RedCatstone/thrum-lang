@@ -183,7 +183,7 @@ impl<'ast> TypeChecker<'ast> {
                 }
 
                 // invert the covered cases
-                covered_cases.extend(PatternSpace::covered_to_missing_cases(&covered, &self.typed_ast.enum_defs));
+                covered_cases.extend(PatternSpace::covered_to_missing_cases(&covered, &self.type_arena.enum_defs));
 
                 typ
             }
@@ -300,7 +300,7 @@ impl<'ast> TypeChecker<'ast> {
                         expected_refined_enum = true;
 
                         let enum_id = self.get_wrapped_enum_id(inner).unwrap();
-                        let variants = &self.typed_ast.enum_defs[enum_id.0 as usize].variants;
+                        let variants = &self.type_arena.enum_defs[enum_id.0 as usize].variants;
 
                         let (variant_name, attached_type) = variants[variant].clone();
                         if *variant_name != *name {

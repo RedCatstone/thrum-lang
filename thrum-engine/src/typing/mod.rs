@@ -174,8 +174,6 @@ pub struct TypeChecker<'a> {
 pub struct TypedAst {
     pub expr_types: Vec<TypeId>,  // Indexed with ExprId
 
-    pub enum_defs: Vec<EnumDefinition>,  // indexed with EnumId
-
     pub vars: Vec<TypeVar>,  // indexed with TypeVarId
     pub resolved_expr_var: HashMap<ExprId, TypeVarId>,
     pub resolved_pattern_var: HashMap<PatternId, TypeVarId>,
@@ -214,8 +212,11 @@ impl TypedAst {
 
 #[derive(Debug)]
 pub struct TypeArena {
-    // indexed with TypeId
+    /// indexed with TypeId
     pub types: Vec<Type>,
+
+    /// indexed with EnumId
+    pub enum_defs: Vec<EnumDefinition>,
 
     // duplicate types should get the same id
     // because of inference types there can still be dupes
@@ -224,7 +225,7 @@ pub struct TypeArena {
 }
 impl TypeArena {
     #[must_use] fn new() -> Self {
-        let mut ta = Self { types: Vec::new(), type_dedup: HashMap::new() };
+        let mut ta = Self { types: Vec::new(), enum_defs: Vec::new(), type_dedup: HashMap::new() };
         // add the hardcoded types
         for (id, typ) in TypeId::MAP_CONSTS {
             assert_eq!(*id, ta.add_type(typ.clone()));
@@ -247,6 +248,12 @@ impl TypeArena {
         }
     }
 
+    #[must_use] fn add_enum_def(&mut self, def: EnumDefinition) -> EnumId {
+        let id = EnumId(self.enum_defs.len().try_into().unwrap());
+        self.enum_defs.push(def);
+        id
+    }
+
     pub(super) fn get_static_str_borrow(&mut self) -> TypeId {
         self.add_type(Type::Borrow {
             inner: TypeId::STR,
@@ -259,10 +266,21 @@ impl TypeArena {
         match self.get_type(typ) {
             Type::NumInt | Type::NumFloat | Type::Bool | Type::Borrow { .. } => 8,
             Type::Void => 0,
-            Type::CustomType(_, inner) => self.type_size(inner),
             Type::Tup(TupMode::Tup(elems)) => elems.iter().map(|e| self.type_size(e.typ)).sum(),
             Type::Tup(TupMode::Arr(elem, len)) => self.type_size(elem) * len,
-            _ => unreachable!(),
+            Type::Enum(id) => {
+                self.enum_defs[id.0 as usize]
+                    .variants.iter()
+                    .map(|(_, variant_type)| self.type_size(*variant_type))
+                    .max()
+                    .unwrap_or(0)
+                    + self.type_size(TypeId::INT)
+            }
+
+            Type::CustomType(_, inner)
+            | Type::EnumVariant { inner, .. } => self.type_size(inner),
+
+            typ => todo!("{typ:?}"),
         }
     }
 }
@@ -272,7 +290,7 @@ pub struct EnumDefinition {
     /// maps variant names to their `attached_tuple`
     /// e.g. "Some" -> `Type::Tup(...)`
     /// e.g. "None" -> `Type::Void`
-    variants: Vec<(Box<str>, TypeId)>
+    pub variants: Vec<(Box<str>, TypeId)>
 }
 
 pub struct LabelInfo<'ast> {
@@ -288,14 +306,14 @@ pub enum ResolvedMemberAccess {
     TupleIndex { index: usize },  // tup^.0
     Member { constant: VmValue },  // Point.distance(p)
     MemberWithSelfSugar { constant: VmValue, self_sugar_expr: ExprId },  // p.distance()
-    EnumWithNoData { i: usize }  // Option.None
+    EnumWithNoData { i: usize, enum_id: EnumId }  // Option.None
 }
 
 #[derive(Debug)]
 pub enum ResolvedTypeInstantiation {
     NewType,
     Tuple,
-    EnumVariant(usize),
+    EnumVariant(usize, EnumId),
 }
 
 #[derive(Clone, Copy)]
@@ -604,7 +622,7 @@ impl TypeChecker<'_> {
                 self.write_type(inner, s)?;
 
                 let enum_id = self.get_wrapped_enum_id(inner).unwrap();
-                let variants = &self.typed_ast.enum_defs[enum_id.0 as usize].variants;
+                let variants = &self.type_arena.enum_defs[enum_id.0 as usize].variants;
 
                 write!(s, ".{}", variants[variant_index].0)
             }
@@ -692,9 +710,9 @@ impl TypeChecker<'_> {
             self.typed_ast.vars[i].typ = self.zonk_type(self.typed_ast.vars[i].typ, span, &mut cache);
         }
         // zonk enum variant types
-        for i in 0..self.typed_ast.enum_defs.len() {
-            for j in 0..self.typed_ast.enum_defs[i].variants.len() {
-                self.typed_ast.enum_defs[i].variants[j].1 = self.zonk_type(self.typed_ast.enum_defs[i].variants[j].1, Span::invalid(), &mut cache);
+        for i in 0..self.type_arena.enum_defs.len() {
+            for j in 0..self.type_arena.enum_defs[i].variants.len() {
+                self.type_arena.enum_defs[i].variants[j].1 = self.zonk_type(self.type_arena.enum_defs[i].variants[j].1, Span::invalid(), &mut cache);
             }
         }
 

@@ -1,8 +1,9 @@
 use std::fmt::{self, Display, Formatter};
 
-use crate::{pretty_printing::slice_to_string, uir::ir::{
-    AggregateKind, Constant, LocalId, Operand, RValue, Statement, Terminator, UirFunction,
-}};
+use crate::{
+    pretty_printing::slice_to_string,
+    uir::ir::{Constant, LocalId, Operand, RValue, Statement, Terminator, UirFunction}
+};
 
 impl Display for UirFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -66,11 +67,11 @@ impl Display for Terminator {
         match self {
             Self::Goto(target) => write!(f, "goto -> bb{};", target.0),
             Self::MatchOnInt { discr, targets, otherwise } => {
-                write!(f, "MatchOnInt({discr}) -> [")?;
+                write!(f, "MatchOnInt({discr}): [")?;
                 for (val, target) in targets {
-                    write!(f, "{val}: bb{}, ", target.0)?;
+                    write!(f, "{val} -> bb{}, ", target.0)?;
                 }
-                write!(f, "otherwise: bb{}];", otherwise.0)
+                write!(f, "_ -> bb{}];", otherwise.0)
             }
             Self::Call { func, args, destination, target } => {
                 let args_str: Vec<String> = args.iter().map(std::string::ToString::to_string).collect();
@@ -135,20 +136,10 @@ impl Display for RValue {
             Self::TupleGetRef { tuple, offset } => write!(f, "{tuple}.&{offset}"),
             Self::IndexRef { base, index, elem_size, len } => write!(f, "{base}[{index}; size: {elem_size}, len: {len}]"),
 
-            Self::UseDiscriminant(place) => write!(f, "discriminant({place})"),
-            Self::MakeAggregate(kind, operands) => {
-                let ops: Vec<String> = operands.iter().map(std::string::ToString::to_string).collect();
-                match kind {
-                    AggregateKind::Tuple => write!(f, "Tuple({})", ops.join(", ")),
-                    AggregateKind::Array => write!(f, "Array([{}])", ops.join(", ")),
-                    AggregateKind::Enum { variant_index, .. } => {
-                        write!(f, "EnumVariant(#{variant_index}, {})", ops.join(", "))
-                    }
-                    AggregateKind::FormatString { str_pieces, .. } => {
-                        write!(f, "FormatString(pieces: {:?}, holes: [{}])", str_pieces, ops.join(", "))
-                    }
-                }
-            }
+            Self::MakeEnum { enum_id, variant_index, payload } => write!(f, "enum({enum_id:?}.{variant_index}({payload}))"),
+            Self::ReadDiscriminant(place) => write!(f, "discriminant({place})"),
+            Self::SetDiscriminant(place, op) => write!(f, "discriminant({place}) = {op}"),
+
             Self::MakeSlice { ptr, len } => write!(f, "Slice(ptr: {ptr}, len: {len})"),
             Self::GetLen(place) => write!(f, "Len({place})"),
             Self::Cast { operand, target_type } => write!(f, "Cast({operand} as {target_type:?})"),

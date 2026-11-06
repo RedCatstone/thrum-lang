@@ -1,5 +1,5 @@
 // run me by doing `cargo run Code.thrum`
 
-let (true, x, _) | (false, _, x) = (false, 1, 2)
+const Option = enum { Some{ int }, None }
 
-x
+Option.Some{ 3 } is :Some{ 2 }

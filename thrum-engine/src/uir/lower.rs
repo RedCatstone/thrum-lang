@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    parsing::ast::{AstArena, BinOp, Expr, ExprId, Pattern, PatternId}, typing::{ResolvedMemberAccess, TupMode, Type, TypeArena, TypeId, TypeVarId, TypedAst}, uir::ir::{
+    parsing::ast::{AstArena, BinOp, Expr, ExprId, Pattern, PatternId}, typing::{ResolvedMemberAccess, ResolvedTypeInstantiation, TupMode, Type, TypeArena, TypeId, TypeVarId, TypedAst}, uir::ir::{
         BlockId, Constant, FunctionId, LocalId, Operand, RValue, Statement, Terminator, UirFunction,
     }, vm_compiling::NumMode,
 };
@@ -64,9 +64,6 @@ impl<'a> FnLowerer<'a> {
             Expr::Literal { val } => {
                 let constant = Constant::from_val(val);
                 self.add_curr_statement(Statement::Assign(dest, RValue::Use(Operand::Constant(constant))));
-            }
-            Expr::Void => {
-                // void expression go brrrr
             }
 
             Expr::Infix { op, left, right, op_span: _ } => {
@@ -205,7 +202,47 @@ impl<'a> FnLowerer<'a> {
                             RValue::TupleGetRef { tuple: left_local, offset },
                         ));
                     }
+                    ResolvedMemberAccess::EnumWithNoData { i, enum_id } => {
+                        self.add_curr_statement(Statement::Assign(
+                            dest,
+                            RValue::MakeEnum { enum_id: *enum_id, variant_index: *i, payload: Operand::Constant(Constant::Void) }
+                        ));
+                    }
                     x => todo!("{x:?} not yet implemented"),
+                }
+            }
+
+            Expr::EnumVariant { data } => {
+                let (enum_id, variant_index) = self.typed_ast.resolved_enum_variant[&expr_id];
+                let payload_op = data.attached_tuple.map_or(
+                    Operand::Constant(Constant::Void),
+                    |tup_expr| self.lower_expr_to_operand(tup_expr)
+                );
+
+                self.add_curr_statement(Statement::Assign(
+                    dest,
+                    RValue::MakeEnum { enum_id, variant_index, payload: payload_op },
+                ));
+            }
+
+            Expr::TypeInstantiation { typ: _, data } => {
+                match self.typed_ast.resolved_type_instantian[&expr_id] {
+                    ResolvedTypeInstantiation::NewType => {
+                        let Expr::Tuple { elems } = self.ast.get_expr(*data) else {
+                            unreachable!("always a tuple.")
+                        };
+                        self.lower_expr_to_local(elems[0].expr, dest);
+                    }
+                    ResolvedTypeInstantiation::Tuple => {
+                        self.lower_expr_to_local(*data, dest);
+                    }
+                    ResolvedTypeInstantiation::EnumVariant(variant_index, enum_id) => {
+                        let payload_op = self.lower_expr_to_operand(*data);
+                        self.add_curr_statement(Statement::Assign(
+                            dest,
+                            RValue::MakeEnum { enum_id, variant_index, payload: payload_op }
+                        ));
+                    }
                 }
             }
 
@@ -291,6 +328,12 @@ impl<'a> FnLowerer<'a> {
 
                 self.current_block = after_is_block;
             }
+
+            // do nothing here, these are void or only for the typechecker.
+            Expr::Void
+            | Expr::Const { .. }
+            | Expr::CustomType { .. }
+            | Expr::ImplBlock { .. } => { }
 
             other => todo!("support for {other:?} not yet implemented"),
         }
@@ -515,6 +558,39 @@ impl<'a> FnLowerer<'a> {
                     && !is_last {
                         self.current_block = next_elem_block;
                     }
+                }
+            }
+
+            Pattern::EnumVariant { name: _, attached_tuple } => {
+                let (enum_id, variant_index) = self.typed_ast.resolved_enum_variant_pattern[&pattern];
+
+                if let Some((_, fail_block)) = success_fail_block {
+                    let discr_temp = self.new_temp_of_type(TypeId::INT);
+                    self.add_curr_statement(Statement::Assign(discr_temp, RValue::ReadDiscriminant(current_val)));
+
+                    let payload_check_block = self.function.new_block();
+
+                    self.set_curr_terminator(Terminator::MatchOnInt {
+                        discr: Operand::Copy(discr_temp),
+                        targets: vec![(variant_index.try_into().unwrap(), payload_check_block)],
+                        otherwise: fail_block,
+                    });
+
+                    self.current_block = payload_check_block;
+                } else {
+                    // if its expected to not fail, then we also don't need to check the discriminant ;p
+                }
+
+                if let Some(tup_pat) = attached_tuple {
+                    let payload_type = self.type_arena.enum_defs[enum_id.0 as usize].variants[variant_index].1;
+
+                    let payload_local = self.new_temp_of_type(payload_type);
+                    self.add_curr_statement(Statement::Assign(
+                        payload_local,
+                        RValue::TupleGet { tuple: val_local, offset: 8 },
+                    ));
+
+                    self.lower_pattern(*tup_pat, payload_local, success_fail_block);
                 }
             }
 

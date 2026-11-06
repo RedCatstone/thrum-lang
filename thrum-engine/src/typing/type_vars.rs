@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use derive_more::Display;
 
 use crate::{
-    ErrType, lexing::tokens::Span, nativelib::ThrumModule, parsing::ast::{AstEnumExpression, Expr, ExprId, PatternId}, typing::{CustomTypeId, EnumDefinition, EnumId, LabelInfo, Lifetime, Type, TypeChecker, TypeId, TypeVarId, check_expressions::CheckExprCtx}, vm_compiling::{VmCompiler, VmValue}
+    ErrType, lexing::tokens::Span, nativelib::ThrumModule,
+    parsing::ast::{AstEnumExpression, Expr, ExprId, PatternId},
+    typing::{CustomTypeId, EnumDefinition, LabelInfo, Lifetime, Type, TypeChecker, TypeId, TypeVarId, check_expressions::CheckExprCtx},
+    vm_compiling::{VmCompiler, VmValue}
 };
 
 
@@ -133,12 +136,6 @@ impl<'ast> TypeChecker<'ast> {
             }
         }
         None
-    }
-
-    fn add_enum_def(&mut self, def: EnumDefinition) -> EnumId {
-        let id = EnumId(self.typed_ast.enum_defs.len().try_into().unwrap());
-        self.typed_ast.enum_defs.push(def);
-        id
     }
 
 
@@ -284,7 +281,7 @@ impl<'ast> TypeChecker<'ast> {
                         (variant_name.clone(), attached_tuple_type)
                     }).collect();
 
-                let enum_id = self.add_enum_def(EnumDefinition { variants });
+                let enum_id = self.type_arena.add_enum_def(EnumDefinition { variants });
                 let enum_type = self.type_arena.add_type(Type::Enum(enum_id));
 
                 Some(VmValue::Type(enum_type))

@@ -319,10 +319,10 @@ impl TypeChecker<'_> {
                     self.restore_vars_state(&original_snap);
                 }
 
-                let missing_cases = PatternSpace::covered_to_missing_cases(&covered_cases, &self.typed_ast.enum_defs);
+                let missing_cases = PatternSpace::covered_to_missing_cases(&covered_cases, &self.type_arena.enum_defs);
                 if !missing_cases.is_empty() {
                     self.error(crate::ErrType::TyperPatternDoesntCoverAllCases {
-                        remaining: PatternSpace::display_patterns(&missing_cases, &self.typed_ast.enum_defs)
+                        remaining: PatternSpace::display_patterns(&missing_cases, &self.type_arena.enum_defs)
                     }, span);
                 }
 
@@ -527,9 +527,9 @@ impl TypeChecker<'_> {
                     // its a refined constructor. e.g. `type X = Opt.Some; X{ 3 }`
 
                     let enum_id = self.get_wrapped_enum_id(inner).unwrap();
-                    let attached_type = self.typed_ast.enum_defs[enum_id.0 as usize].variants[variant].1;
+                    let attached_type = self.type_arena.enum_defs[enum_id.0 as usize].variants[variant].1;
                     self.check_instantiation_payload(attached_type, check_expr, *data, is_never, ctx);
-                    self.typed_ast.resolved_type_instantian.insert(check_expr, ResolvedTypeInstantiation::EnumVariant(variant));
+                    self.typed_ast.resolved_type_instantian.insert(check_expr, ResolvedTypeInstantiation::EnumVariant(variant, enum_id));
 
                     meta_id
                 }
@@ -799,10 +799,10 @@ impl TypeChecker<'_> {
         );
 
         let span = self.ast.get_pattern_span(pattern);
-        let remaining = PatternSpace::covered_to_missing_cases(&covered, &self.typed_ast.enum_defs);
+        let remaining = PatternSpace::covered_to_missing_cases(&covered, &self.type_arena.enum_defs);
         if !can_fail && !remaining.is_empty() {
             self.error(ErrType::TyperFailableAssignPattern {
-                remaining: PatternSpace::display_patterns(&remaining, &self.typed_ast.enum_defs)
+                remaining: PatternSpace::display_patterns(&remaining, &self.type_arena.enum_defs)
             }, span);
         }
         if !can_bind_vars && !vars_defined.is_empty() {
@@ -851,11 +851,11 @@ impl TypeChecker<'_> {
             let (_, covered) = self.check_match_pattern(param_pattern,
                 CheckPatternCtx::new(Some(param_type), true, true, &mut HashMap::new(), None)
             );
-            let remaining = PatternSpace::covered_to_missing_cases(&covered, &self.typed_ast.enum_defs);
+            let remaining = PatternSpace::covered_to_missing_cases(&covered, &self.type_arena.enum_defs);
             if !remaining.is_empty() {
                 let param_span = self.ast.get_pattern_span(param_pattern);
                 self.error(ErrType::TyperPatternDoesntCoverAllCases {
-                    remaining: PatternSpace::display_patterns(&remaining, &self.typed_ast.enum_defs)
+                    remaining: PatternSpace::display_patterns(&remaining, &self.type_arena.enum_defs)
                 }, param_span);
             }
         }
@@ -922,7 +922,7 @@ impl TypeChecker<'_> {
 
                 // if its an enum, check if the member is a variant
                 if let Some(
-                    (_, variant_index, attached_type, refined_type)
+                    (enum_id, variant_index, attached_type, refined_type)
                 ) = self.check_enum_variant(member, Some(meta_type_id), None) {
                     // found a variant!
 
@@ -939,7 +939,7 @@ impl TypeChecker<'_> {
                         if self.prune_type_once(attached_type) == Type::Void {
                             // if the variant has no data, return a soft specialized type, e.g. `Option.None`
                             // soft allows it to unify with `.Some` later
-                            self.typed_ast.resolved_member_access.insert(member_expr, ResolvedMemberAccess::EnumWithNoData { i: variant_index });
+                            self.typed_ast.resolved_member_access.insert(member_expr, ResolvedMemberAccess::EnumWithNoData { i: variant_index, enum_id });
                             refined_type
                         } else {
                             // has data => error. `Option.Some` without anything extra is invalid
@@ -1116,7 +1116,7 @@ impl TypeChecker<'_> {
 
         match self.get_wrapped_enum_id(expected) {
             Ok(enum_id) => {
-                let enum_def = &self.typed_ast.enum_defs[enum_id.0 as usize];
+                let enum_def = &self.type_arena.enum_defs[enum_id.0 as usize];
 
                 // try to find the correct .Variant
                 let Some(variant) = enum_def.variants.iter().position(|(name, _)| **name == *variant_name) else {

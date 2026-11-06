@@ -86,6 +86,10 @@ impl<'a> UirRunner<'a> {
                 let target_addr = self.read_pointer(self.resolve_local_offset(*pointer));
                 self.copy_operand(value, target_addr);
             }
+            Statement::SetDiscriminant { local, variant_index } => {
+                let offset = self.resolve_local_offset(*local);
+                self.write_int(offset, (*variant_index).try_into().unwrap());
+            }
             Statement::Nop => {}
             _ => todo!("Statement {stmt:?} not implemented yet"),
         }
@@ -210,6 +214,18 @@ impl<'a> UirRunner<'a> {
                 self.write_pointer(dest, base_ptr + idx_usize * elem_size);
             }
 
+            RValue::ReadDiscriminant(local) => {
+                let enum_offset = self.resolve_local_offset(*local);
+                let discr = self.read_int(enum_offset);
+                self.write_int(dest, discr);
+            }
+            RValue::MakeEnum { enum_id: _, variant_index, payload } => {
+                // tag at offset 0
+                self.write_int(dest, (*variant_index).try_into().unwrap());
+                // payload at offset 8
+                self.copy_operand(payload, dest + 8);
+            }
+
             _ => todo!("Rvalue {rvalue:?} not implemented yet"),
         }
         Ok(())
@@ -255,8 +271,10 @@ impl<'a> UirRunner<'a> {
     }
 
 
+    #[track_caller]
     fn copy_operand(&mut self, op: &Operand, dest_offset: usize) {
         match op {
+            Operand::Constant(Constant::Void) => {} // 0 bytes, do nothing TODO: generalize this better so this case doesn't need to be here
             Operand::Constant(c) => {
                 let bytes = Self::eval_constant_bytes(c);
                 self.write_bytes(dest_offset, &bytes);
@@ -272,6 +290,7 @@ impl<'a> UirRunner<'a> {
 
     fn operand_size(&self, op: &Operand) -> usize {
         match op {
+            Operand::Constant(Constant::Void) => 0,
             Operand::Constant(_) => 8,
             Operand::Copy(l) | Operand::Move(l) => self.function.locals[l.0 as usize].size,
         }
@@ -305,6 +324,7 @@ impl<'a> UirRunner<'a> {
         f64::from_ne_bytes(self.eval_operand_bytes(op))
     }
 
+    #[track_caller]
     fn write_bytes(&mut self, offset: usize, bytes: &[u8]) {
         self.memory[offset..offset + bytes.len()].copy_from_slice(bytes);
     }
@@ -343,7 +363,6 @@ impl<'a> UirRunner<'a> {
             Type::NumFloat => VmValue::Float(self.read_float(offset)),
             Type::Bool => VmValue::Bool(self.read_int(offset) != 0),
             Type::Void => VmValue::Void,
-            Type::CustomType(_, inner) => self.read_vm_value(offset, inner, type_arena),
             Type::Tup(mode) => {
                 let mut vals = Vec::with_capacity(mode.len());
                 match mode {
@@ -364,6 +383,17 @@ impl<'a> UirRunner<'a> {
                 }
                 VmValue::Tup(vals)
             }
+            Type::Enum(id) => {
+                let tag = self.read_int(offset);
+                let tag_usize: usize = tag.try_into().unwrap();
+
+                let variant_type = type_arena.enum_defs[id.0 as usize].variants[tag_usize].1;
+                let payload = self.read_vm_value(offset + 8, variant_type, type_arena);
+                VmValue::Tup(vec![VmValue::Int(tag), payload])
+            }
+            Type::CustomType(_, inner)
+            | Type::EnumVariant { inner, .. } => self.read_vm_value(offset, inner, type_arena),
+
             // TODO: this final dereffing should be done in the typechecker instead.
             Type::Borrow { inner, .. } => {
                 let ptr = self.read_pointer(offset);
