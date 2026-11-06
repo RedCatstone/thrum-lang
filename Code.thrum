@@ -1,5 +1,11 @@
 // run me by doing `cargo run Code.thrum`
 
-const Option = enum { Some{ int }, None }
+let mut i = 0
 
-Option.Some{ 3 } is :Some{ 2 }
+loop {
+    i += 1
+
+    if i > 2 {
+        break 10
+    }
+}

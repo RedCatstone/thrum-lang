@@ -1,5 +1,5 @@
 use crate::{
-    parsing::ast::{AstIds, AstValue, BinOp, UnaryOp}, typing::{EnumId, TypeId}, vm_compiling::{NumMode, VmFormatArgDisplayFn},
+    parsing::ast::{AstIds, AstValue, BinOp, UnaryOp},typing::{EnumId, TypeId}, vm_compiling::NumMode,
 };
 
 
@@ -32,7 +32,7 @@ impl UirFunction {
                 }
             ],
             frame_size: return_slot_size,
-            blocks: vec![BasicBlock::new(Terminator::Unreachable)],
+            blocks: vec![BasicBlock::new("entry")],
             entry_block: BlockId(0),
         }
     }
@@ -49,9 +49,9 @@ impl UirFunction {
         self.new_local(type_id, size, None, false)
     }
 
-    pub fn new_block(&mut self) -> BlockId {
+    pub fn new_block(&mut self, debug_name: &'static str) -> BlockId {
         let id = BlockId(self.blocks.len().try_into().unwrap());
-        self.blocks.push(BasicBlock::new(Terminator::Unreachable));
+        self.blocks.push(BasicBlock::new(debug_name));
         id
     }
 
@@ -59,8 +59,12 @@ impl UirFunction {
         self.blocks[block.0 as usize].statements.push(stmt);
     }
 
+    /// only sets a terminator, if there wasn't one yet.
     pub fn set_terminator(&mut self, block: BlockId, term: Terminator) {
-        self.blocks[block.0 as usize].terminator = term;
+        let curr_term = &mut self.blocks[block.0 as usize].terminator;
+        if *curr_term == Terminator::Unreachable {
+           *curr_term = term;
+        }
     }
 }
 
@@ -121,14 +125,15 @@ pub enum Operand {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BasicBlock {
+    pub debug_name: &'static str,
     pub statements: Vec<Statement>,
     pub terminator: Terminator,
 }
 
 impl BasicBlock {
     #[must_use]
-    pub const fn new(terminator: Terminator) -> Self {
-        Self { statements: Vec::new(), terminator }
+    pub const fn new(debug_name: &'static str) -> Self {
+        Self { statements: Vec::new(), terminator: Terminator::Unreachable, debug_name }
     }
 }
 

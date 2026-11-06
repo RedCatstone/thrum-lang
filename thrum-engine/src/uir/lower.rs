@@ -13,6 +13,7 @@ pub struct FnLowerer<'a> {
     function: UirFunction,
     current_block: BlockId,
     var_to_local: HashMap<TypeVarId, LocalId>,
+    loop_infos: HashMap<ExprId, (BlockId, BlockId, LocalId)>,
 }
 
 impl<'a> FnLowerer<'a> {
@@ -28,7 +29,7 @@ impl<'a> FnLowerer<'a> {
         let function = UirFunction::new(FunctionId(0), "main".to_string(), 0, return_type, return_size);
         let current_block = function.entry_block;
 
-        Self { ast, typed_ast, type_arena, function, current_block, var_to_local: HashMap::new() }
+        Self { ast, typed_ast, type_arena, function, current_block, var_to_local: HashMap::new(), loop_infos: HashMap::new() }
     }
 
     fn lower_function_root(&mut self, root: ExprId) {
@@ -49,7 +50,7 @@ impl<'a> FnLowerer<'a> {
 
         // auto-derefs from the typechecker
         if let Some(&derefs) = deref_count {
-            let mut curr = dest;
+            let mut curr = temp_dest;
             for i in 0..derefs {
                 let target = if i + 1 == derefs { dest } else { self.function.new_temp(TypeId::INT, 8) };
                 self.add_curr_statement(Statement::Assign(target, RValue::Deref(curr)));
@@ -85,6 +86,11 @@ impl<'a> FnLowerer<'a> {
                 if let Some((last, others)) = exprs.split_last() {
                     for expr in others {
                         let _discard_temp = self.new_temp_expr(*expr);
+
+                        // if an expression returns never, then it doesn't need to compile the exprs after
+                        if let TypeId::NEVER = self.typed_ast.get_expr_type(*expr) {
+                            return
+                        }
                     }
                     self.lower_expr_to_local(*last, dest);
                 }
@@ -251,9 +257,9 @@ impl<'a> FnLowerer<'a> {
             Expr::If { condition, then, alt, never_alt: _ } => {
                 let condition_op = self.lower_expr_to_operand(*condition);
 
-                let then_block = self.function.new_block();
-                let alt_block = self.function.new_block();
-                let after_if_block = self.function.new_block();
+                let then_block = self.function.new_block("if_then");
+                let alt_block = self.function.new_block("if_alt");
+                let after_if_block = self.function.new_block("after_if");
 
                 self.set_curr_terminator(Terminator::MatchOnInt {
                     discr: condition_op,
@@ -272,14 +278,45 @@ impl<'a> FnLowerer<'a> {
                 self.current_block = after_if_block;
             }
 
+            Expr::Loop { body, label: _ } => {
+                let loop_body = self.function.new_block("loop_body");
+                let after_loop = self.function.new_block("after_loop");
+
+                self.loop_infos.insert(expr_id, (loop_body, after_loop, dest));
+
+                self.set_curr_terminator(Terminator::Goto(loop_body));
+                self.current_block = loop_body;
+                self.lower_expr_to_operand(*body);
+                self.set_curr_terminator(Terminator::Goto(loop_body));
+
+                assert_eq!(self.loop_infos.remove(&expr_id), Some((loop_body, after_loop, dest)));
+
+                self.current_block = after_loop;
+            }
+
+            Expr::Break { label: _, expr } => {
+                let break_to = self.typed_ast.resolved_labels[&expr_id];
+                let (_, after_loop, break_dest) = self.loop_infos[&break_to];
+
+                self.lower_expr_to_local(*expr, break_dest);
+
+                self.set_curr_terminator(Terminator::Goto(after_loop));
+            }
+            Expr::Continue { label: _ } => {
+                let break_to = self.typed_ast.resolved_labels[&expr_id];
+                let (loop_body, _, _) = self.loop_infos[&break_to];
+
+                self.set_curr_terminator(Terminator::Goto(loop_body));
+            }
+
             Expr::Match { match_value, arms } => {
                 let value_local = self.new_temp_expr(*match_value);
-                let after_match_block = self.function.new_block();
+                let after_match_block = self.function.new_block("after_match");
 
                 for (i, arm) in arms.iter().enumerate() {
                     let isnt_last = i + 1 != arms.len();
                     let target_blocks = if isnt_last {
-                        Some((self.function.new_block(), self.function.new_block()))
+                        Some((self.function.new_block("arm_success"), self.function.new_block("arm_fail")))
                     } else {
                         None
                     };
@@ -304,9 +341,9 @@ impl<'a> FnLowerer<'a> {
             Expr::Is { value, pattern } => {
                 let val_local = self.new_temp_expr(*value);
 
-                let success_block = self.function.new_block();
-                let failure_block = self.function.new_block();
-                let after_is_block = self.function.new_block();
+                let success_block = self.function.new_block("is_success");
+                let failure_block = self.function.new_block("is_fail");
+                let after_is_block = self.function.new_block("after_is");
 
                 self.lower_pattern(*pattern, val_local, Some((success_block, failure_block)));
 
@@ -434,11 +471,6 @@ impl<'a> FnLowerer<'a> {
 
         let new_val_local = current_val;
 
-        // default the block terminator to jump to success_block if there is any.
-        if let Some((success_block, _)) = success_fail_block {
-            self.set_curr_terminator(Terminator::Goto(success_block));
-        }
-
         match self.ast.get_pattern(pattern) {
             Pattern::Binding { .. } => {
                 let var_id = self.typed_ast.resolved_pattern_var[&pattern];
@@ -477,7 +509,7 @@ impl<'a> FnLowerer<'a> {
             Pattern::Or(patterns) => {
                 let success_block = match success_fail_block {
                     Some((s, _)) => s,
-                    None => self.function.new_block()
+                    None => self.function.new_block("or_full_success")
                 };
 
                 for (i, &pat) in patterns.iter().enumerate() {
@@ -492,7 +524,7 @@ impl<'a> FnLowerer<'a> {
                             }
                         }
                     } else {
-                        Some((success_block, self.function.new_block()))
+                        Some((success_block, self.function.new_block("pattern_or_next")))
                     };
 
                     self.lower_pattern(pat, current_val, target_blocks);
@@ -507,7 +539,7 @@ impl<'a> FnLowerer<'a> {
 
             Pattern::Conditional { pattern, cond } => {
                 let (success_block, fail_block) = success_fail_block.unwrap();
-                let cond_block = self.function.new_block();
+                let cond_block = self.function.new_block("cond_pattern");
 
                 self.lower_pattern(*pattern, new_val_local, Some((cond_block, fail_block)));
 
@@ -546,7 +578,7 @@ impl<'a> FnLowerer<'a> {
                     // or to the failure block if it doesn't match.
                     let elem_targets = match success_fail_block {
                         Some((success_block, fail_block)) => {
-                            let next_elem_block = if is_last { success_block } else { self.function.new_block() };
+                            let next_elem_block = if is_last { success_block } else { self.function.new_block("pattern_tup_next") };
                             Some((next_elem_block, fail_block))
                         }
                         None => None  // no blocks added if no branches can fail!
@@ -568,7 +600,7 @@ impl<'a> FnLowerer<'a> {
                     let discr_temp = self.new_temp_of_type(TypeId::INT);
                     self.add_curr_statement(Statement::Assign(discr_temp, RValue::ReadDiscriminant(current_val)));
 
-                    let payload_check_block = self.function.new_block();
+                    let payload_check_block = self.function.new_block("pattern_enum_payload");
 
                     self.set_curr_terminator(Terminator::MatchOnInt {
                         discr: Operand::Copy(discr_temp),
@@ -607,6 +639,11 @@ impl<'a> FnLowerer<'a> {
             }
 
             x => todo!("{x:?} not yet implemented...")
+        }
+
+        // if the block terminator wasn't set yet, just set it to jump to success_block
+        if let Some((success_block, _)) = success_fail_block {
+            self.set_curr_terminator(Terminator::Goto(success_block));
         }
     }
 }

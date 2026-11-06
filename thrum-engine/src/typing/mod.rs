@@ -265,7 +265,7 @@ impl TypeArena {
     #[must_use] pub fn type_size(&self, typ: TypeId) -> usize {
         match self.get_type(typ) {
             Type::NumInt | Type::NumFloat | Type::Bool | Type::Borrow { .. } => 8,
-            Type::Void => 0,
+            Type::Void | Type::Never => 0,
             Type::Tup(TupMode::Tup(elems)) => elems.iter().map(|e| self.type_size(e.typ)).sum(),
             Type::Tup(TupMode::Arr(elem, len)) => self.type_size(elem) * len,
             Type::Enum(id) => {

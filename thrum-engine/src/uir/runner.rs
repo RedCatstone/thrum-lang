@@ -66,10 +66,12 @@ impl<'a> UirRunner<'a> {
             }
             else {
                 let finished = self.step_terminator(&block.terminator)?;
-                println!("{YELLOW}{:<30}{RESET}", format!("{}", block.terminator));
+                println!("{:<30}", format!("{}", block.terminator));
                 if finished {
+                    println!();
                     break
                 }
+                println!("{YELLOW}--> {}{RESET}", self.function.format_block_name(self.frames.last().unwrap().current_block.0 as usize));
             }
         }
         Ok(())

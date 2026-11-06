@@ -24,7 +24,7 @@ impl Display for UirFunction {
 
         // Print basic blocks
         for (i, block) in self.blocks.iter().enumerate() {
-            writeln!(f, "  block{i}: {{")?;
+            writeln!(f, "  {}: {{", self.format_block_name(i))?;
             for stmt in &block.statements {
                 writeln!(f, "    {stmt}")?;
             }
@@ -36,6 +36,10 @@ impl Display for UirFunction {
 }
 
 impl UirFunction {
+    pub fn format_block_name(&self, i: usize) -> String {
+        format!("block{i}({})", self.blocks[i].debug_name)
+    }
+
     fn format_params(&self) -> String {
         let params: Vec<String> = (1..=self.param_count)
             .map(|i| {
